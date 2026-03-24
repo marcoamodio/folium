@@ -1,27 +1,39 @@
-import type { Editor, TLEditorSnapshot } from 'tldraw'
+import { encrypt } from './crypto'
+import { getOrCreateKey } from './cryptoKey'
 import { CANVAS_ID, db } from './db'
 import { notifySaveStatus } from './saveStatus'
 
 const DEBOUNCE_MS = 400
 
-export function subscribeCanvasPersistence(editor: Editor): () => void {
+const keyPromise = getOrCreateKey()
+
+export type CanvasPersistenceBinding = {
+  serialize: () => string
+  subscribe: (onChange: () => void) => () => void
+}
+
+export function subscribeCanvasPersistence(
+  binding: CanvasPersistenceBinding,
+): () => void {
   let timer: ReturnType<typeof setTimeout> | null = null
 
   async function runSave(): Promise<void> {
     notifySaveStatus('saving')
 
-    let snapshot: TLEditorSnapshot
+    let json: string
     try {
-      snapshot = editor.getSnapshot()
+      json = binding.serialize()
     } catch {
       notifySaveStatus('idle')
       return
     }
 
     try {
+      const key = await keyPromise
+      const payload = await encrypt(json, key)
       await db.canvas.put({
         id: CANVAS_ID,
-        snapshot,
+        payload,
         updatedAt: Date.now(),
       })
       if (timer !== null) return
@@ -49,7 +61,7 @@ export function subscribeCanvasPersistence(editor: Editor): () => void {
     }, DEBOUNCE_MS)
   }
 
-  const unlisten = editor.store.listen(schedule)
+  const unlisten = binding.subscribe(schedule)
 
   const onVisibility = () => {
     if (document.visibilityState === 'hidden') flush()

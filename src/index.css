@@ -1,3 +1,5 @@
+@import 'tailwindcss';
+
 :root {
   --text: #6b6375;
   --text-h: #08060d;
@@ -76,7 +78,7 @@ body,
   height: 100%;
 }
 
-/* Chrome sits above the canvas visually; pointer-events none keeps tldraw UI usable (same stacking level would block the whole editor). */
+/* Chrome sits above the canvas visually; pointer-events none so the Konva stage stays interactive. */
 .folium-top-bar {
   position: fixed;
   top: 0;

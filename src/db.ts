@@ -1,11 +1,10 @@
 import Dexie, { type Table } from 'dexie'
-import type { TLEditorSnapshot } from 'tldraw'
 
 export const CANVAS_ID = 'main' as const
 
 export interface CanvasRow {
   id: string
-  snapshot: TLEditorSnapshot
+  payload: string
   updatedAt: number
 }
 
@@ -17,6 +16,13 @@ class FoliumDB extends Dexie {
     this.version(1).stores({
       canvas: 'id, updatedAt',
     })
+    this.version(2)
+      .stores({
+        canvas: 'id, updatedAt',
+      })
+      .upgrade(async (tx) => {
+        await tx.table('canvas').clear()
+      })
   }
 }
 

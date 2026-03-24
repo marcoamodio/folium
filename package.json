@@ -11,9 +11,11 @@
   },
   "dependencies": {
     "dexie": "^4.3.0",
+    "immer": "^11.1.4",
+    "konva": "^10.2.3",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
-    "tldraw": "^4.5.3"
+    "react-konva": "^19.2.3"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",
