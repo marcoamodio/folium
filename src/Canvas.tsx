@@ -102,27 +102,46 @@ function CanvasToolbar({ onAdd }: CanvasToolbarProps) {
   )
 }
 
+function rectStrokeProps(
+  el: CanvasElement,
+  selected: boolean,
+): { stroke: string; strokeWidth: number } | Record<string, never> {
+  if (selected) {
+    return { stroke: '#3b82f6', strokeWidth: 2 }
+  }
+  if (el.kind === 'card') {
+    return { stroke: '#d4d4d8', strokeWidth: 2 }
+  }
+  return {}
+}
+
 type CanvasElementNodeProps = {
   el: CanvasElement
+  selected: boolean
+  onSelect: (id: string) => void
   onDragEnd: (id: string, x: number, y: number) => void
   onEditRequest: (el: CanvasElement) => void
 }
 
 function CanvasElementNode({
   el,
+  selected,
+  onSelect,
   onDragEnd,
   onEditRequest,
 }: CanvasElementNodeProps) {
-  const strokeProps =
-    el.kind === 'card'
-      ? ({ stroke: '#d4d4d8', strokeWidth: 2 } as const)
-      : ({} as const)
+  const strokeProps = rectStrokeProps(el, selected)
 
   return (
     <Group
       x={el.x}
       y={el.y}
       draggable
+      onClick={(e: Konva.KonvaEventObject<MouseEvent>) => {
+        if (e.evt.button !== 0) return
+        e.cancelBubble = true
+        onSelect(el.id)
+      }}
       onDragEnd={(e: Konva.KonvaEventObject<DragEvent>) => {
         onDragEnd(el.id, e.target.x(), e.target.y())
       }}
@@ -163,6 +182,17 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
   const [containerRect, setContainerRect] = useState<DOMRectReadOnly | null>(
     null,
   )
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+
+  const effectiveSelectedId = useMemo(() => {
+    if (selectedId === null) return null
+    return state.elements.some((e) => e.id === selectedId) ? selectedId : null
+  }, [selectedId, state.elements])
+
+  const effectiveSelectedIdRef = useRef<string | null>(null)
+  useLayoutEffect(() => {
+    effectiveSelectedIdRef.current = effectiveSelectedId
+  }, [effectiveSelectedId])
 
   const listenersRef = useRef(new Set<() => void>())
   const emit = useCallback(() => {
@@ -221,6 +251,23 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
       window.removeEventListener('keyup', up)
     }
   }, [undo, redo])
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (effectiveSelectedIdRef.current === null) return
+      const active = document.activeElement?.tagName
+      if (active === 'INPUT' || active === 'TEXTAREA') return
+      if (e.key !== 'Backspace' && e.key !== 'Delete') return
+      e.preventDefault()
+      const id = effectiveSelectedIdRef.current
+      setSelectedId(null)
+      commit((d) => {
+        d.elements = d.elements.filter((x) => x.id !== id)
+      })
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [commit])
 
   const panning = useRef(false)
   const panStart = useRef({ cx: 0, cy: 0, vx: 0, vy: 0 })
@@ -401,12 +448,19 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
             height={2e6}
             fill="#f5f5f5"
             listening
+            onClick={(e: Konva.KonvaEventObject<MouseEvent>) => {
+              if (e.target.name() !== 'folium-bg') return
+              if (e.evt.button !== 0) return
+              setSelectedId(null)
+            }}
             onDblClick={onBgDblClick}
           />
           {state.elements.map((el) => (
             <CanvasElementNode
               key={el.id}
               el={el}
+              selected={el.id === effectiveSelectedId}
+              onSelect={setSelectedId}
               onDragEnd={onDragEnd}
               onEditRequest={onEditRequest}
             />
