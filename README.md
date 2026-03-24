@@ -20,7 +20,7 @@ Opens instantly. No login. No friction.
 - TailwindCSS
 
 ## Getting started
-git clone https://github.com/yourname/folium.git
+git clone https://github.com/marcoamodio/folium.git
 cd folium
 npm install
 npm run dev
