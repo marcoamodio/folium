@@ -1,5 +1,6 @@
 import Konva from 'konva'
 import type { CSSProperties } from 'react'
+import type { ChangeEvent } from 'react'
 import {
   useCallback,
   useEffect,
@@ -8,7 +9,7 @@ import {
   useRef,
   useState,
 } from 'react'
-import { Circle, Group, Layer, Rect, Stage, Text } from 'react-konva'
+import { Group, Layer, Rect, Stage, Text } from 'react-konva'
 import { subscribeCanvasPersistence } from './canvasPersistence'
 import type { CanvasElement, CanvasState, ElementKind } from './types'
 import {
@@ -16,19 +17,45 @@ import {
   ELEMENT_DEFAULTS,
   NOTE_COLORS,
   TASK_ACCENT_COLORS,
+  TEXT_COLORS,
 } from './types'
 import { useCanvasHistory } from './useCanvasHistory'
 
 const SCALE_MIN = 0.1
 const SCALE_MAX = 4
-const GRID_STEP = 24
+const ZOOM_STEP = 1.08
+const WORLD_DOT_STEP = 24
 const NOTE_HEADER = 32
 const MIN_ELEMENT_W = 80
 const MIN_ELEMENT_H = 40
 const MARQUEE_THRESHOLD = 5
 const HANDLE_SIZE = 8
 
-type ActiveTool = 'select' | 'note' | 'task' | 'card'
+/** FigJam-style free text */
+const TEXT_FONT_SIZE = 14
+const TEXT_LINE_HEIGHT = 1.357
+const TEXT_FONT_FAMILY = 'Inter, system-ui, -apple-system, sans-serif'
+const TEXT_PAD_X = 6
+const TEXT_PAD_Y = 4
+const FIGJAM_TEXT_STROKE = '#783ae9'
+const FIGJAM_PLACEHOLDER = '#a3a3a3'
+
+function measureTextBlockHeight(text: string, boxWidth: number): number {
+  const innerW = Math.max(16, boxWidth - TEXT_PAD_X * 2)
+  const node = new Konva.Text({
+    text: text.trim() ? text : '\u00a0',
+    width: innerW,
+    fontSize: TEXT_FONT_SIZE,
+    fontFamily: TEXT_FONT_FAMILY,
+    lineHeight: TEXT_LINE_HEIGHT,
+    wrap: 'word',
+  })
+  const innerH = node.height()
+  node.destroy()
+  return Math.max(MIN_ELEMENT_H, Math.ceil(innerH + TEXT_PAD_Y * 2))
+}
+
+type ActiveTool = 'select' | 'note' | 'task' | 'card' | 'text'
 type HandleId = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w'
 
 function clamp(n: number, min: number, max: number): number {
@@ -37,6 +64,18 @@ function clamp(n: number, min: number, max: number): number {
 
 function createElement(kind: ElementKind, cx: number, cy: number): CanvasElement {
   const d = ELEMENT_DEFAULTS[kind]
+  if (kind === 'text') {
+    return {
+      id: crypto.randomUUID(),
+      kind: 'text',
+      x: cx,
+      y: cy,
+      width: d.width,
+      height: measureTextBlockHeight(d.text, d.width),
+      text: d.text,
+      color: d.color,
+    }
+  }
   return {
     id: crypto.randomUUID(),
     kind,
@@ -58,22 +97,6 @@ function worldFromPointer(
   return {
     wx: (p.x - viewport.x) / viewport.scale,
     wy: (p.y - viewport.y) / viewport.scale,
-  }
-}
-
-function visibleWorldBounds(
-  w: number,
-  h: number,
-  vx: number,
-  vy: number,
-  scale: number,
-): { minX: number; maxX: number; minY: number; maxY: number } {
-  const pad = 200
-  return {
-    minX: (-vx) / scale - pad,
-    maxX: (w - vx) / scale + pad,
-    minY: (-vy) / scale - pad,
-    maxY: (h - vy) / scale + pad,
   }
 }
 
@@ -195,49 +218,16 @@ function cursorForHandle(h: HandleId): string {
   return map[h]
 }
 
-type GridDotsProps = {
-  width: number
-  height: number
-  vx: number
-  vy: number
-  scale: number
+function modPositive(n: number, m: number): number {
+  return ((n % m) + m) % m
 }
 
-function GridDots({ width, height, vx, vy, scale }: GridDotsProps) {
-  const { minX, maxX, minY, maxY } = visibleWorldBounds(
-    width,
-    height,
-    vx,
-    vy,
-    scale,
-  )
-  const gx0 = Math.floor(minX / GRID_STEP) * GRID_STEP
-  const gy0 = Math.floor(minY / GRID_STEP) * GRID_STEP
-  const dotCount =
-    ((maxX - gx0) / GRID_STEP + 1) * ((maxY - gy0) / GRID_STEP + 1)
-  if (dotCount > 8000) return null
-
-  const dots: { cx: number; cy: number }[] = []
-  for (let x = gx0; x <= maxX; x += GRID_STEP) {
-    for (let y = gy0; y <= maxY; y += GRID_STEP) {
-      dots.push({ cx: x, cy: y })
-    }
-  }
-
-  return (
-    <>
-      {dots.map((d, i) => (
-        <Circle
-          key={`${d.cx}-${d.cy}-${i}`}
-          x={d.cx}
-          y={d.cy}
-          radius={1}
-          fill="#d4d4d4"
-          listening={false}
-        />
-      ))}
-    </>
-  )
+function targetIsBoardBackground(
+  target: Konva.Node,
+  stage: Konva.Stage,
+): boolean {
+  if (target.name() === 'folium-bg') return true
+  return target === stage
 }
 
 type CanvasElementNodeProps = {
@@ -376,6 +366,66 @@ function CanvasElementNode({
             wrap="word"
             verticalAlign="middle"
             align="center"
+            listening={false}
+          />
+        ) : null}
+      </Group>
+    )
+  }
+
+  if (display.kind === 'text') {
+    const empty = display.text.trim().length === 0
+    return (
+      <Group
+        x={display.x}
+        y={display.y}
+        draggable
+        onMouseDown={(e: Konva.KonvaEventObject<MouseEvent>) => {
+          e.cancelBubble = true
+        }}
+        onClick={(e: Konva.KonvaEventObject<MouseEvent>) => {
+          if (e.evt.button !== 0) return
+          e.cancelBubble = true
+          onSelect(el.id)
+        }}
+        onDragStart={() => onDragStart(el.id)}
+        onDragEnd={(e: Konva.KonvaEventObject<DragEvent>) => {
+          onDragEnd(el.id, e.target.x(), e.target.y())
+        }}
+        onDblClick={(e: Konva.KonvaEventObject<MouseEvent>) => {
+          e.cancelBubble = true
+          onEditRequest(el)
+        }}
+      >
+        <Rect
+          width={display.width}
+          height={display.height}
+          fill="rgba(0,0,0,0.002)"
+        />
+        {!editing ? (
+          <Text
+            x={TEXT_PAD_X}
+            y={TEXT_PAD_Y}
+            width={display.width - TEXT_PAD_X * 2}
+            height={display.height - TEXT_PAD_Y * 2}
+            text={empty ? 'Add text' : display.text}
+            fontSize={TEXT_FONT_SIZE}
+            fontFamily={TEXT_FONT_FAMILY}
+            lineHeight={TEXT_LINE_HEIGHT}
+            fill={empty ? FIGJAM_PLACEHOLDER : display.color}
+            wrap="word"
+            verticalAlign="top"
+            align="left"
+            listening={false}
+          />
+        ) : null}
+        {selected && !editing ? (
+          <Rect
+            width={display.width}
+            height={display.height}
+            stroke={FIGJAM_TEXT_STROKE}
+            strokeWidth={1.25}
+            dash={[5, 4]}
             listening={false}
           />
         ) : null}
@@ -545,6 +595,47 @@ const toolBtnBase: CSSProperties = {
   color: '#374151',
 }
 
+const zoomBarStyle: CSSProperties = {
+  position: 'fixed',
+  right: 16,
+  left: 'auto',
+  bottom: 20,
+  zIndex: 1100,
+  display: 'flex',
+  alignItems: 'center',
+  gap: 2,
+  padding: '4px 6px',
+  background: '#ffffff',
+  borderRadius: 8,
+  border: '1px solid #e5e7eb',
+  boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
+  pointerEvents: 'auto',
+}
+
+const zoomBtnStyle: CSSProperties = {
+  width: 30,
+  height: 30,
+  borderRadius: 6,
+  border: 'none',
+  background: 'transparent',
+  cursor: 'pointer',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  padding: 0,
+  color: '#374151',
+}
+
+const zoomPercentStyle: CSSProperties = {
+  minWidth: 44,
+  textAlign: 'center',
+  fontSize: 12,
+  fontWeight: 500,
+  color: '#374151',
+  fontFamily: 'system-ui, Inter, sans-serif',
+  userSelect: 'none',
+}
+
 const swatchPanelStyle: CSSProperties = {
   position: 'fixed',
   left: 72,
@@ -572,12 +663,36 @@ const swatchBtn: CSSProperties = {
 }
 
 function IconNote() {
+  /* FigJam-style: stacked pale stickies + front note with straight-fold dog-ear */
   return (
     <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden>
-      <path
-        fill="currentColor"
-        d="M4 3h10a2 2 0 0 1 2 2v9l-3-3H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"
+      <rect
+        x="6.75"
+        y="6.25"
+        width="9"
+        height="9"
+        rx="1.35"
+        fill="#E8D88A"
       />
+      <rect
+        x="6"
+        y="5.65"
+        width="9"
+        height="9"
+        rx="1.35"
+        fill="#F3E08A"
+      />
+      <rect
+        x="5.25"
+        y="4.85"
+        width="9"
+        height="9"
+        rx="1.35"
+        fill="#FFF6C8"
+        stroke="#DEC56E"
+        strokeWidth="0.45"
+      />
+      <path fill="#E9C85C" d="M11.15 13.85h3.1v-3.1z" />
     </svg>
   )
 }
@@ -621,6 +736,49 @@ function IconSelect() {
         stroke="currentColor"
         strokeWidth="1.5"
         d="M3 3l7 14 2-6 6-2L3 3z"
+      />
+    </svg>
+  )
+}
+
+/** FigJam-style text / paragraph tool (T mark) */
+function IconText() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden>
+      <path
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        d="M6 5h8M10 5v11"
+      />
+    </svg>
+  )
+}
+
+function IconZoomOut() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 20 20" aria-hidden>
+      <path
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        d="M5 10h10"
+      />
+    </svg>
+  )
+}
+
+function IconZoomIn() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 20 20" aria-hidden>
+      <path
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        d="M10 5v10M5 10h10"
       />
     </svg>
   )
@@ -711,6 +869,19 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
     ro.observe(el)
     return () => ro.disconnect()
   }, [])
+
+  useLayoutEffect(() => {
+    const stage = stageRef.current
+    if (!stage) return
+    const container = stage.container()
+    if (!container) return
+    container.style.backgroundColor = 'transparent'
+    container.style.backgroundImage = 'none'
+    const canvases = container.querySelectorAll('canvas')
+    canvases.forEach((c) => {
+      c.style.backgroundColor = 'transparent'
+    })
+  }, [size.w, size.h])
 
   const [panDraft, setPanDraft] = useState<{ x: number; y: number } | null>(
     null,
@@ -875,9 +1046,9 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
   const handleStageMouseDown = (e: Konva.KonvaEventObject<MouseEvent>) => {
     const stage = e.target.getStage()
     if (!stage) return
-    const name = e.target.name()
+    const onBg = targetIsBoardBackground(e.target, stage)
     const canPan =
-      name === 'folium-bg' &&
+      onBg &&
       (e.evt.button === 1 || (e.evt.button === 0 && spaceDown.current))
     if (canPan) {
       e.evt.preventDefault()
@@ -893,7 +1064,7 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
     }
 
     if (
-      name === 'folium-bg' &&
+      onBg &&
       e.evt.button === 0 &&
       activeTool === 'select' &&
       !spaceDown.current
@@ -955,48 +1126,104 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [commit])
 
+  const zoomFromCenter = useCallback(
+    (factor: number) => {
+      const oldScale = vScale
+      const newScale = clamp(oldScale * factor, SCALE_MIN, SCALE_MAX)
+      if (newScale === oldScale) return
+      panning.current = false
+      setPanDraft(null)
+      const pointer = { x: size.w / 2, y: size.h / 2 }
+      const mousePointTo = {
+        x: (pointer.x - vx) / oldScale,
+        y: (pointer.y - vy) / oldScale,
+      }
+      const newPos = {
+        x: pointer.x - mousePointTo.x * newScale,
+        y: pointer.y - mousePointTo.y * newScale,
+      }
+      commit((d) => {
+        d.viewport.scale = newScale
+        d.viewport.x = newPos.x
+        d.viewport.y = newPos.y
+      })
+    },
+    [vx, vy, vScale, size.w, size.h, commit],
+  )
+
   const onWheel = (e: Konva.KonvaEventObject<WheelEvent>) => {
     e.evt.preventDefault()
     const stage = stageRef.current
     if (!stage) return
-    const oldScale = state.viewport.scale
-    const scaleBy = 1.08
-    const newScale = clamp(
-      e.evt.deltaY < 0 ? oldScale * scaleBy : oldScale / scaleBy,
-      SCALE_MIN,
-      SCALE_MAX,
-    )
-    const pointer = stage.getPointerPosition()
-    if (!pointer) return
-    const mousePointTo = {
-      x: (pointer.x - state.viewport.x) / oldScale,
-      y: (pointer.y - state.viewport.y) / oldScale,
+
+    const ev = e.evt
+    const zoomChord = ev.metaKey || ev.ctrlKey
+
+    if (zoomChord) {
+      const oldScale = vScale
+      const newScale = clamp(
+        ev.deltaY < 0 ? oldScale * ZOOM_STEP : oldScale / ZOOM_STEP,
+        SCALE_MIN,
+        SCALE_MAX,
+      )
+      if (newScale === oldScale) return
+      const pointer = stage.getPointerPosition()
+      if (!pointer) return
+      const mousePointTo = {
+        x: (pointer.x - vx) / oldScale,
+        y: (pointer.y - vy) / oldScale,
+      }
+      const newPos = {
+        x: pointer.x - mousePointTo.x * newScale,
+        y: pointer.y - mousePointTo.y * newScale,
+      }
+      panning.current = false
+      setPanDraft(null)
+      commit((d) => {
+        d.viewport.scale = newScale
+        d.viewport.x = newPos.x
+        d.viewport.y = newPos.y
+      })
+      return
     }
-    const newPos = {
-      x: pointer.x - mousePointTo.x * newScale,
-      y: pointer.y - mousePointTo.y * newScale,
+
+    let dx = ev.deltaX
+    let dy = ev.deltaY
+    if (ev.deltaMode === WheelEvent.DOM_DELTA_LINE) {
+      dx *= 16
+      dy *= 16
+    } else if (ev.deltaMode === WheelEvent.DOM_DELTA_PAGE) {
+      dx *= size.w * 0.85
+      dy *= size.h * 0.85
     }
+    if (dx === 0 && dy === 0) return
+
+    panning.current = false
+    setPanDraft(null)
     commit((d) => {
-      d.viewport.scale = newScale
-      d.viewport.x = newPos.x
-      d.viewport.y = newPos.y
+      d.viewport.x = vx - dx
+      d.viewport.y = vy - dy
     })
   }
 
   const onBgClick = (e: Konva.KonvaEventObject<MouseEvent>) => {
-    if (e.target.name() !== 'folium-bg') return
+    const stage = e.target.getStage()
+    if (!stage || !targetIsBoardBackground(e.target, stage)) return
     if (e.evt.button !== 0) return
     if (activeTool !== 'select') {
-      const stage = e.target.getStage()
-      if (!stage) return
       const w = worldFromPointer(stage, viewportMemo)
       if (!w) return
-      const next = createElement(activeTool, w.wx, w.wy)
+      const tool = activeTool
+      const next = createElement(tool, w.wx, w.wy)
       commit((d) => {
         d.elements.push(next)
       })
       setActiveTool('select')
       setSelectedIds([next.id])
+      if (tool === 'text') {
+        setEditing(next)
+        setEditText('')
+      }
     }
   }
 
@@ -1019,6 +1246,8 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
     width: number
     height: number
   } | null>(null)
+  const [editLayoutTick, setEditLayoutTick] = useState(0)
+  const textEditRef = useRef<HTMLTextAreaElement | null>(null)
 
   const editingLive = useMemo(() => {
     if (!editing) return null
@@ -1038,14 +1267,48 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
         setEditLayout(null)
         return
       }
-      setEditLayout(screenRectFromStage(stage, editingLive, viewportMemo))
+      const base = screenRectFromStage(stage, editingLive, viewportMemo)
+      if (editingLive.kind === 'text') {
+        const ta = textEditRef.current
+        const sh = ta?.scrollHeight
+        const hPx =
+          sh != null ? Math.max(base.height, sh) : Math.max(base.height, 24)
+        setEditLayout({
+          left: base.left,
+          top: base.top,
+          width: base.width,
+          height: hPx,
+        })
+        return
+      }
+      setEditLayout(base)
     }
     const id = requestAnimationFrame(apply)
     return () => {
       cancelled = true
       cancelAnimationFrame(id)
     }
-  }, [editingLive, viewportMemo, size.w, size.h])
+  }, [
+    editingLive,
+    viewportMemo,
+    size.w,
+    size.h,
+    editText,
+    editLayoutTick,
+  ])
+
+  useEffect(() => {
+    if (editing?.kind !== 'text') return
+    const id = requestAnimationFrame(() => {
+      const ta = textEditRef.current
+      if (ta) {
+        ta.style.height = '0'
+        ta.style.height = `${ta.scrollHeight}px`
+      }
+      setEditLayoutTick((n) => n + 1)
+    })
+    return () => cancelAnimationFrame(id)
+  }, [editing?.id, editing?.kind])
 
   const textareaPaddingStyle = useMemo((): CSSProperties => {
     if (!editing) return {}
@@ -1057,6 +1320,11 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
     }
     if (editing.kind === 'card') {
       return { padding: '12px' }
+    }
+    if (editing.kind === 'text') {
+      return {
+        padding: `${TEXT_PAD_Y}px ${TEXT_PAD_X}px`,
+      }
     }
     return { padding: '12px', paddingLeft: 20 }
   }, [editing])
@@ -1070,10 +1338,16 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
     if (!editing) return
     const id = editing.id
     const text = editText
+    const kind = editing.kind
     setEditing(null)
     commit((d) => {
       const found = d.elements.find((x) => x.id === id)
-      if (found) found.text = text
+      if (found) {
+        found.text = text
+        if (kind === 'text') {
+          found.height = measureTextBlockHeight(text, found.width)
+        }
+      }
     })
   }
 
@@ -1120,6 +1394,9 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
         f.y = prev.y
         f.width = prev.width
         f.height = prev.height
+        if (f.kind === 'text') {
+          f.height = measureTextBlockHeight(f.text, f.width)
+        }
       }
     })
   }
@@ -1147,7 +1424,9 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
         ? CARD_COLORS
         : firstSelectedKind === 'task'
           ? TASK_ACCENT_COLORS
-          : []
+          : firstSelectedKind === 'text'
+            ? TEXT_COLORS
+            : []
 
   const updateCursor = useCallback(() => {
     const container = stageRef.current?.container()
@@ -1223,18 +1502,20 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
 
   const normMarquee = marquee ? normalizeMarquee(marquee.x, marquee.y, marquee.width, marquee.height) : null
 
+  const dotStepPx = WORLD_DOT_STEP * vScale
+  const boardSurfaceStyle: CSSProperties = {
+    position: 'fixed',
+    inset: 0,
+    width: '100%',
+    height: '100%',
+    touchAction: 'none',
+    ['--folium-dot-step' as string]: `${dotStepPx}px`,
+    ['--folium-bg-x' as string]: `${modPositive(vx, dotStepPx)}px`,
+    ['--folium-bg-y' as string]: `${modPositive(vy, dotStepPx)}px`,
+  }
+
   return (
-    <div
-      ref={wrapRef}
-      style={{
-        position: 'fixed',
-        inset: 0,
-        width: '100%',
-        height: '100%',
-        touchAction: 'none',
-        backgroundColor: '#f8f8f8',
-      }}
-    >
+    <div ref={wrapRef} className="folium-board-bg" style={boardSurfaceStyle}>
       <Stage
         ref={stageRef}
         width={size.w}
@@ -1243,19 +1524,11 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
         y={vy}
         scaleX={vScale}
         scaleY={vScale}
+        style={{ background: 'transparent' }}
         onMouseDown={handleStageMouseDown}
         onMouseMove={onStageMouseMoveCursor}
         onWheel={onWheel}
       >
-        <Layer listening={false}>
-          <GridDots
-            width={size.w}
-            height={size.h}
-            vx={vx}
-            vy={vy}
-            scale={vScale}
-          />
-        </Layer>
         <Layer>
           <Rect
             name="folium-bg"
@@ -1263,7 +1536,8 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
             y={-1e6}
             width={2e6}
             height={2e6}
-            fill="#f8f8f8"
+            fill="#ffffff"
+            opacity={0}
             listening
             onClick={onBgClick}
           />
@@ -1313,6 +1587,7 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
 
       {editLayout ? (
         <textarea
+          ref={textEditRef}
           style={{
             position: 'fixed',
             left: editLayout.left,
@@ -1321,17 +1596,37 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
             height: editLayout.height,
             zIndex: 1200,
             resize: 'none',
-            fontSize: 13,
-            fontFamily: 'system-ui, Inter, sans-serif',
+            fontSize: editing?.kind === 'text' ? TEXT_FONT_SIZE : 13,
+            lineHeight: editing?.kind === 'text' ? TEXT_LINE_HEIGHT : 1.45,
+            fontFamily:
+              editing?.kind === 'text'
+                ? TEXT_FONT_FAMILY
+                : 'system-ui, Inter, sans-serif',
+            color: editing?.kind === 'text' ? editing.color : '#111827',
             border: 'none',
             outline: 'none',
             background: 'transparent',
             boxSizing: 'border-box',
             pointerEvents: 'auto',
+            overflow: editing?.kind === 'text' ? 'hidden' : undefined,
+            boxShadow:
+              editing?.kind === 'text'
+                ? '0 0 0 1px rgba(120, 58, 233, 0.4)'
+                : undefined,
+            borderRadius: editing?.kind === 'text' ? 2 : undefined,
             ...textareaPaddingStyle,
           }}
           value={editText}
-          onChange={(ev) => setEditText(ev.target.value)}
+          placeholder={editing?.kind === 'text' ? 'Add text' : undefined}
+          onChange={(ev: ChangeEvent<HTMLTextAreaElement>) => {
+            setEditText(ev.target.value)
+            if (editing?.kind === 'text') {
+              const ta = ev.target
+              ta.style.height = '0'
+              ta.style.height = `${ta.scrollHeight}px`
+              setEditLayoutTick((n) => n + 1)
+            }
+          }}
           onBlur={closeEdit}
           onKeyDown={(ev) => {
             if (ev.key === 'Escape') {
@@ -1363,6 +1658,26 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
           onClick={() => setActiveTool('select')}
         >
           <IconSelect />
+        </button>
+        <button
+          type="button"
+          title="Text"
+          style={{
+            ...toolBtnBase,
+            background: activeTool === 'text' ? '#eff6ff' : 'transparent',
+            color: activeTool === 'text' ? '#3b82f6' : '#374151',
+          }}
+          onMouseEnter={(e) => {
+            if (activeTool !== 'text')
+              e.currentTarget.style.background = '#f3f4f6'
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background =
+              activeTool === 'text' ? '#eff6ff' : 'transparent'
+          }}
+          onClick={() => setActiveTool('text')}
+        >
+          <IconText />
         </button>
         <button
           type="button"
@@ -1439,6 +1754,38 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
           ))}
         </div>
       ) : null}
+
+      <div style={zoomBarStyle}>
+        <button
+          type="button"
+          title="Zoom out"
+          style={zoomBtnStyle}
+          onClick={() => zoomFromCenter(1 / ZOOM_STEP)}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = '#f3f4f6'
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = 'transparent'
+          }}
+        >
+          <IconZoomOut />
+        </button>
+        <span style={zoomPercentStyle}>{Math.round(vScale * 100)}%</span>
+        <button
+          type="button"
+          title="Zoom in"
+          style={zoomBtnStyle}
+          onClick={() => zoomFromCenter(ZOOM_STEP)}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = '#f3f4f6'
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = 'transparent'
+          }}
+        >
+          <IconZoomIn />
+        </button>
+      </div>
     </div>
   )
 }

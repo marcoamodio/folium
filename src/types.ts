@@ -1,4 +1,4 @@
-export type ElementKind = 'note' | 'task' | 'card'
+export type ElementKind = 'note' | 'task' | 'card' | 'text'
 
 export interface CanvasElement {
   id: string
@@ -53,6 +53,15 @@ export const TASK_ACCENT_COLORS = [
   '#8b5cf6',
 ] as const
 
+/** Text / paragraph tool: used as Konva Text fill. */
+export const TEXT_COLORS = [
+  '#111827',
+  '#374151',
+  '#1d4ed8',
+  '#b45309',
+  '#be123c',
+] as const
+
 export const ELEMENT_DEFAULTS: Record<
   ElementKind,
   { width: number; height: number; text: string; color: string }
@@ -75,10 +84,16 @@ export const ELEMENT_DEFAULTS: Record<
     text: '• Task',
     color: TASK_ACCENT_COLORS[0],
   },
+  text: {
+    width: 240,
+    height: 40,
+    text: '',
+    color: TEXT_COLORS[0],
+  },
 }
 
 function isElementKind(v: unknown): v is ElementKind {
-  return v === 'note' || v === 'task' || v === 'card'
+  return v === 'note' || v === 'task' || v === 'card' || v === 'text'
 }
 
 function isCanvasElement(v: unknown): v is CanvasElement {
