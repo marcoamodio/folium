@@ -1,35 +1,47 @@
 # Folium
+
 > Infinite space.
 
-An infinite canvas for notes, quick task lists, and card sorting.
-Opens instantly. No login. No friction.
+An infinite canvas for notes, quick task lists, card sorting, free-form text, and pasted images. Opens instantly. No login. No friction.
 
 ## Features
-- Infinite canvas powered by tldraw
-- Auto-save with debounce (400ms)
-- Full restore on refresh via IndexedDB
-- AES-256-GCM encryption — all data encrypted client-side
-- Zero backend — everything lives in your browser
-- Minimal top bar with live save status indicator
+
+- **Infinite canvas** — Pan and zoom on a dotted board (FigJam-style background).
+- **Elements** — Sticky notes, cards, tasks, FigJam-like text blocks, and **raster images**.
+- **Images** — Drag **JPEG, PNG, WebP, or GIF** from your machine onto the board. Each file up to **5 MB**; images are scaled to a sensible on-canvas size and stored in your saved state (data URLs). Drag selected images to move them like other elements.
+- **Navigation** — Scroll/wheel to pan; **⌘/Ctrl + scroll** to zoom toward the cursor; **+ / −** control in the corner.
+- **Hand tool** — Hold **Space** to pan with the mouse, including when the pointer is over a selected image or other element (same idea as FigJam). **Middle mouse** also pans, including over elements.
+- **Selection** — Click to select, marquee on empty board, resize handles on a single selection, **Delete/Backspace** to remove.
+- **Auto-save** — Debounced save (~400 ms) to IndexedDB.
+- **Full restore** — Canvas state reloads after refresh.
+- **Encryption** — AES-256-GCM: payload encrypted in the browser before storage.
+- **Zero backend** — Everything stays local in your browser.
+- **Minimal chrome** — Toolbar for tools, optional color swatches when relevant, save status in the top bar.
 
 ## Tech stack
+
 - Vite + React + TypeScript
-- tldraw
+- **Konva** + react-konva (canvas)
+- Immer (immutable updates)
 - Dexie.js (IndexedDB)
 - Web Crypto API (AES-256-GCM)
-- TailwindCSS
+- Tailwind CSS
 
 ## Getting started
+
+```bash
 git clone https://github.com/marcoamodio/folium.git
 cd folium
 npm install
 npm run dev
+```
 
 ## Roadmap
-- [ ] AES-256-GCM encryption (in progress)
+
 - [ ] Export canvas (JSON / PNG)
 - [ ] Cloud sync (Phase 2)
 - [ ] Account + subscription (Phase 2)
 
 ## License
+
 MIT
