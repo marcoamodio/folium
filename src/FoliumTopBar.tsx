@@ -1,31 +1,7 @@
 import { useEffect, useState } from 'react'
+import logoSrc from './assets/logo-placeholder-folium.svg'
 import { useSaveStatus } from './SaveStatusContext'
 import type { SaveStatus } from './saveStatus'
-
-function FoliumMark({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      width={18}
-      height={18}
-      viewBox="0 0 18 18"
-      fill="none"
-      xmlns="http://www.w3.org/2000/svg"
-      aria-hidden
-    >
-      <path
-        d="M9 15.5V9"
-        stroke="currentColor"
-        strokeWidth="1.25"
-        strokeLinecap="round"
-      />
-      <path
-        fill="currentColor"
-        d="M9 2.25c.35 0 .7.06 1.03.17 2.9.95 4.47 4.02 3.52 6.92a5.65 5.65 0 0 1-2.09 2.93A5.4 5.4 0 0 1 9 13.25a5.4 5.4 0 0 1-2.46-.98 5.65 5.65 0 0 1-2.09-2.93c-.95-2.9.62-5.97 3.52-6.92.33-.11.68-.17 1.03-.17Z"
-      />
-    </svg>
-  )
-}
 
 const STATUS_LABEL: Record<Exclude<SaveStatus, 'idle'>, string> = {
   saving: 'Saving…',
@@ -67,9 +43,15 @@ export function FoliumTopBar() {
   return (
     <header className="folium-top-bar">
       <div className="folium-top-bar__inner">
-        <div className="folium-top-bar__brand">
-          <FoliumMark className="folium-top-bar__mark" />
-          <span className="folium-top-bar__title">Folium</span>
+        <div className="folium-top-bar__logo-wrap">
+          <img
+            src={logoSrc}
+            alt="Folium"
+            className="folium-top-bar__logo"
+            width={814}
+            height={271}
+            decoding="async"
+          />
         </div>
         <div
           className={`folium-top-bar__status folium-top-bar__status--${status}`}

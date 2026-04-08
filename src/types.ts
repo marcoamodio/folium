@@ -1,5 +1,14 @@
 export type ElementKind = 'note' | 'task' | 'card' | 'text' | 'image'
 
+/** Konva Text.fontStyle values we persist for the text tool. */
+export type TextFontStyleKonva =
+  | 'normal'
+  | 'italic'
+  | 'bold'
+  | 'bold italic'
+
+export type TextAlignKonva = 'left' | 'center' | 'right'
+
 export interface CanvasElement {
   id: string
   kind: ElementKind
@@ -15,6 +24,110 @@ export interface CanvasElement {
    * Present only when `kind === 'image'`.
    */
   imageSrc?: string
+  /** `kind === 'text'`: font size in px (clamped when read). */
+  fontSize?: number
+  /** `kind === 'text'`: CSS font-family stack (see `TEXT_FONT_PRESETS`). */
+  fontFamily?: string
+  /** `kind === 'text'`: Konva `fontStyle` (whole block). */
+  fontStyle?: TextFontStyleKonva
+  /** `kind === 'text'`: horizontal alignment. */
+  textAlign?: TextAlignKonva
+}
+
+/** Default text tool font size (px). */
+export const TEXT_FONT_SIZE_DEFAULT = 14
+
+const TEXT_SIZE_LABELS = [
+  'Small',
+  'Medium',
+  'Large',
+  'Larger',
+  'Extra large',
+  'Huge',
+  'Max',
+] as const
+
+/** Pixel sizes for the text tool (toolbar + layout). */
+export const TEXT_FONT_SIZES = [12, 14, 16, 18, 20, 24, 32] as const
+
+/** FigJam-style size labels (paired with `TEXT_FONT_SIZES`). */
+export const TEXT_SIZE_OPTIONS = TEXT_FONT_SIZES.map((px, i) => ({
+  px,
+  label: TEXT_SIZE_LABELS[i] ?? `${px}px`,
+}))
+
+/**
+ * Text-tool fonts: browser/system stacks only (no webfont loading).
+ * Times, typewriter-style, Courier, generic UI sans (not Inter).
+ */
+export const TEXT_FONT_PRESETS = [
+  {
+    id: 'times',
+    label: 'Times New Roman',
+    family: 'Times New Roman, Times, serif',
+  },
+  {
+    id: 'typewriter',
+    label: 'Typewriter',
+    family:
+      'American Typewriter, Lucida Console, Courier New, Courier, monospace',
+  },
+  {
+    id: 'courier',
+    label: 'Courier',
+    family: 'Courier New, Courier, monospace',
+  },
+  {
+    id: 'system',
+    label: 'System UI',
+    family:
+      'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+  },
+] as const
+
+export function defaultTextFontFamily(): string {
+  return TEXT_FONT_PRESETS[0].family
+}
+
+export function resolveTextFontSize(
+  el: Pick<CanvasElement, 'kind' | 'fontSize'>,
+): number {
+  if (el.kind !== 'text') return TEXT_FONT_SIZE_DEFAULT
+  const n = el.fontSize
+  if (typeof n === 'number' && Number.isFinite(n)) {
+    return Math.min(96, Math.max(8, Math.round(n)))
+  }
+  return TEXT_FONT_SIZE_DEFAULT
+}
+
+export function resolveTextFontFamily(
+  el: Pick<CanvasElement, 'kind' | 'fontFamily'>,
+): string {
+  if (el.kind !== 'text') return defaultTextFontFamily()
+  const f = el.fontFamily
+  if (typeof f === 'string' && f.trim().length > 0) return f
+  return defaultTextFontFamily()
+}
+
+export function resolveTextFontStyle(
+  el: Pick<CanvasElement, 'kind' | 'fontStyle'>,
+): TextFontStyleKonva {
+  if (el.kind !== 'text') return 'normal'
+  const s = el.fontStyle as TextFontStyleKonva | 'italic bold' | undefined
+  if (s === 'italic bold' || s === 'bold italic') return 'bold italic'
+  if (s === 'bold') return 'bold'
+  if (s === 'italic') return 'italic'
+  if (s === 'normal') return 'normal'
+  return 'normal'
+}
+
+export function resolveTextAlign(
+  el: Pick<CanvasElement, 'kind' | 'textAlign'>,
+): TextAlignKonva {
+  if (el.kind !== 'text') return 'left'
+  const a = el.textAlign
+  if (a === 'center' || a === 'right') return a
+  return 'left'
 }
 
 /** Max encoded size per dropped image file (client-side canvas + encrypted IDB). */
@@ -141,7 +254,37 @@ function isCanvasElement(v: unknown): v is CanvasElement {
   if (o.kind === 'image') {
     return typeof o.imageSrc === 'string' && o.imageSrc.length > 0
   }
-  return o.imageSrc === undefined || typeof o.imageSrc === 'string'
+  if (o.imageSrc !== undefined && typeof o.imageSrc !== 'string') return false
+  if (o.fontSize !== undefined) {
+    if (typeof o.fontSize !== 'number' || !Number.isFinite(o.fontSize)) {
+      return false
+    }
+  }
+  if (o.fontFamily !== undefined && typeof o.fontFamily !== 'string') {
+    return false
+  }
+  if (o.fontStyle !== undefined) {
+    if (typeof o.fontStyle !== 'string') return false
+    const norm =
+      o.fontStyle === 'italic bold' ? 'bold italic' : o.fontStyle
+    if (
+      norm !== 'normal' &&
+      norm !== 'italic' &&
+      norm !== 'bold' &&
+      norm !== 'bold italic'
+    ) {
+      return false
+    }
+  }
+  if (
+    o.textAlign !== undefined &&
+    o.textAlign !== 'left' &&
+    o.textAlign !== 'center' &&
+    o.textAlign !== 'right'
+  ) {
+    return false
+  }
+  return true
 }
 
 export function isCanvasState(v: unknown): v is CanvasState {

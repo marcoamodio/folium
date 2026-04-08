@@ -11,15 +11,30 @@ import {
 import { flushSync } from 'react-dom'
 import { Group, Image as KonvaImage, Layer, Rect, Stage, Text } from 'react-konva'
 import { subscribeCanvasPersistence } from './canvasPersistence'
-import type { CanvasElement, CanvasState, ElementKind } from './types'
+import type {
+  CanvasElement,
+  CanvasState,
+  ElementKind,
+  TextAlignKonva,
+  TextFontStyleKonva,
+} from './types'
 import {
   ALLOWED_IMAGE_MIME_TYPES,
   CARD_COLORS,
+  defaultTextFontFamily,
   ELEMENT_DEFAULTS,
   MAX_IMAGE_UPLOAD_BYTES,
   NOTE_COLORS,
+  resolveTextAlign,
+  resolveTextFontFamily,
+  resolveTextFontSize,
+  resolveTextFontStyle,
   TASK_ACCENT_COLORS,
   TEXT_COLORS,
+  TEXT_FONT_PRESETS,
+  TEXT_FONT_SIZE_DEFAULT,
+  TEXT_FONT_SIZES,
+  TEXT_SIZE_OPTIONS,
 } from './types'
 import { useCanvasHistory } from './useCanvasHistory'
 
@@ -34,13 +49,52 @@ const MARQUEE_THRESHOLD = 5
 const HANDLE_SIZE = 8
 
 /** FigJam-style free text */
-const TEXT_FONT_SIZE = 14
 const TEXT_LINE_HEIGHT = 1.357
-const TEXT_FONT_FAMILY = 'Inter, system-ui, -apple-system, sans-serif'
 const TEXT_PAD_X = 6
 const TEXT_PAD_Y = 4
 const FIGJAM_TEXT_STROKE = '#783ae9'
 const FIGJAM_PLACEHOLDER = '#a3a3a3'
+
+const UI_SANS =
+  'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+
+const TEXT_SIZE_CHOICES = new Set<number>(TEXT_FONT_SIZES)
+
+function coerceToolbarFontSize(px: number): number {
+  const c = Math.min(96, Math.max(8, Math.round(px)))
+  if (TEXT_SIZE_CHOICES.has(c)) return c
+  let best: number = TEXT_FONT_SIZES[0]
+  let bestD = Math.abs(best - c)
+  for (const s of TEXT_FONT_SIZES) {
+    const d = Math.abs(s - c)
+    if (d < bestD) {
+      best = s
+      bestD = d
+    }
+  }
+  return best
+}
+
+function normalizeEditFontFamily(family: string): string {
+  return (
+    TEXT_FONT_PRESETS.find((p) => p.family === family)?.family ??
+    defaultTextFontFamily()
+  )
+}
+
+function toggleTextBold(style: TextFontStyleKonva): TextFontStyleKonva {
+  if (style === 'bold') return 'normal'
+  if (style === 'bold italic') return 'italic'
+  if (style === 'italic') return 'bold italic'
+  return 'bold'
+}
+
+function toggleTextItalic(style: TextFontStyleKonva): TextFontStyleKonva {
+  if (style === 'italic') return 'normal'
+  if (style === 'bold italic') return 'bold'
+  if (style === 'bold') return 'bold italic'
+  return 'italic'
+}
 
 /** Longest edge in world px when placing a dropped image (keeps board + IDB payload reasonable). */
 const IMAGE_MAX_WORLD_EDGE = 720
@@ -161,13 +215,20 @@ function BoardRasterImage({
   )
 }
 
-function measureTextBlockHeight(text: string, boxWidth: number): number {
+function measureTextBlockHeight(
+  text: string,
+  boxWidth: number,
+  fontSize: number = TEXT_FONT_SIZE_DEFAULT,
+  fontFamily: string = defaultTextFontFamily(),
+  fontStyle: TextFontStyleKonva = 'normal',
+): number {
   const innerW = Math.max(16, boxWidth - TEXT_PAD_X * 2)
   const node = new Konva.Text({
     text: text.trim() ? text : '\u00a0',
     width: innerW,
-    fontSize: TEXT_FONT_SIZE,
-    fontFamily: TEXT_FONT_FAMILY,
+    fontSize,
+    fontFamily,
+    fontStyle,
     lineHeight: TEXT_LINE_HEIGHT,
     wrap: 'word',
   })
@@ -189,15 +250,23 @@ function createElement(kind: ElementKind, cx: number, cy: number): CanvasElement
   }
   const d = ELEMENT_DEFAULTS[kind]
   if (kind === 'text') {
+    const fs = TEXT_FONT_SIZE_DEFAULT
+    const ff = defaultTextFontFamily()
+    const fst: TextFontStyleKonva = 'normal'
+    const ta: TextAlignKonva = 'left'
     return {
       id: crypto.randomUUID(),
       kind: 'text',
       x: cx,
       y: cy,
       width: d.width,
-      height: measureTextBlockHeight(d.text, d.width),
+      height: measureTextBlockHeight(d.text, d.width, fs, ff, fst),
       text: d.text,
       color: d.color,
+      fontSize: fs,
+      fontFamily: ff,
+      fontStyle: fst,
+      textAlign: ta,
     }
   }
   return {
@@ -518,6 +587,10 @@ function CanvasElementNode({
 
   if (display.kind === 'text') {
     const empty = display.text.trim().length === 0
+    const textFontSize = resolveTextFontSize(display)
+    const textFontFamily = resolveTextFontFamily(display)
+    const textFontStyle = resolveTextFontStyle(display)
+    const textAlign = resolveTextAlign(display)
     return (
       <Group
         x={display.x}
@@ -551,13 +624,14 @@ function CanvasElementNode({
             width={display.width - TEXT_PAD_X * 2}
             height={display.height - TEXT_PAD_Y * 2}
             text={empty ? 'Add text' : display.text}
-            fontSize={TEXT_FONT_SIZE}
-            fontFamily={TEXT_FONT_FAMILY}
+            fontSize={textFontSize}
+            fontFamily={textFontFamily}
+            fontStyle={textFontStyle}
             lineHeight={TEXT_LINE_HEIGHT}
             fill={empty ? FIGJAM_PLACEHOLDER : display.color}
             wrap="word"
             verticalAlign="top"
-            align="left"
+            align={textAlign}
             listening={false}
           />
         ) : null}
@@ -837,7 +911,7 @@ const zoomPercentStyle: CSSProperties = {
   fontSize: 12,
   fontWeight: 500,
   color: '#374151',
-  fontFamily: 'system-ui, Inter, sans-serif',
+  fontFamily: UI_SANS,
   userSelect: 'none',
   background: 'transparent',
   display: 'flex',
@@ -935,6 +1009,86 @@ function IconTask() {
       />
     </svg>
   )
+}
+
+function IconFigjamBold() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
+      <path d="M3.5 2.5h5.2c2.4 0 3.8 1.2 3.8 3 0 1.2-.7 2.1-1.8 2.5 1.4.4 2.3 1.4 2.3 3 0 2.1-1.5 3.5-4 3.5H3.5v-12zm2 5.2h2.6c1 0 1.6-.5 1.6-1.3 0-.8-.5-1.2-1.5-1.2H5.5v2.5zm0 4.8h2.9c1.1 0 1.8-.5 1.8-1.5 0-.9-.6-1.5-1.9-1.5H5.5V12.5z" />
+    </svg>
+  )
+}
+
+function IconFigjamItalic() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden>
+      <path
+        d="M6 2.5h6M7 13.5h6M9.5 2.5L6.5 13.5"
+        stroke="currentColor"
+        strokeWidth="1.35"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
+function IconFigjamAa() {
+  return (
+    <svg width="18" height="14" viewBox="0 0 20 14" fill="currentColor" aria-hidden>
+      <path d="M1 11.5L4.2 2.5h1.6L9 11.5H7.4L6.5 9H3.5L2.6 11.5H1zm3.1-5.2h1.8L5.5 5.2 4.1 6.3h1zm8.4-3.8h1.8l4.2 9h-1.6l-1-2.5H13l-1 2.5h-1.6l4.2-9zm-.2 5.5h2.8L15.5 5.5l-1.2 3.5z" />
+    </svg>
+  )
+}
+
+function IconFigjamAlignLeft() {
+  return (
+    <svg width="16" height="14" viewBox="0 0 16 14" fill="none" aria-hidden>
+      <path
+        d="M2 2h12M2 6h8M2 10h10M2 14h6"
+        stroke="currentColor"
+        strokeWidth="1.25"
+        strokeLinecap="round"
+      />
+    </svg>
+  )
+}
+
+function IconFigjamAlignCenter() {
+  return (
+    <svg width="16" height="14" viewBox="0 0 16 14" fill="none" aria-hidden>
+      <path
+        d="M2 2h12M4 6h8M3 10h10M5 14h6"
+        stroke="currentColor"
+        strokeWidth="1.25"
+        strokeLinecap="round"
+      />
+    </svg>
+  )
+}
+
+function IconFigjamAlignRight() {
+  return (
+    <svg width="16" height="14" viewBox="0 0 16 14" fill="none" aria-hidden>
+      <path
+        d="M2 2h12M6 6h8M4 10h10M8 14h6"
+        stroke="currentColor"
+        strokeWidth="1.25"
+        strokeLinecap="round"
+      />
+    </svg>
+  )
+}
+
+const figjamTextToolbarSelect: CSSProperties = {
+  fontSize: 12,
+  padding: '5px 22px 5px 8px',
+  borderRadius: 6,
+  border: '1px solid rgba(255,255,255,0.14)',
+  background: '#404040',
+  color: '#fafafa',
+  cursor: 'pointer',
+  maxHeight: 30,
 }
 
 function IconSelect() {
@@ -1468,6 +1622,15 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
 
   const [editing, setEditing] = useState<CanvasElement | null>(null)
   const [editText, setEditText] = useState('')
+  const [editFontSize, setEditFontSize] = useState(TEXT_FONT_SIZE_DEFAULT)
+  const [editFontFamily, setEditFontFamily] = useState(() =>
+    defaultTextFontFamily(),
+  )
+  const [editFontStyle, setEditFontStyle] =
+    useState<TextFontStyleKonva>('normal')
+  const [editTextAlign, setEditTextAlign] =
+    useState<TextAlignKonva>('left')
+  const [editTextColor, setEditTextColor] = useState<string>(TEXT_COLORS[0])
   const [editLayout, setEditLayout] = useState<{
     left: number
     top: number
@@ -1476,6 +1639,10 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
   } | null>(null)
   const [editLayoutTick, setEditLayoutTick] = useState(0)
   const textEditRef = useRef<HTMLTextAreaElement | null>(null)
+  const [textColorMenuOpen, setTextColorMenuOpen] = useState(false)
+  const textColorMenuRef = useRef<HTMLDivElement>(null)
+  /** Text formatting toolbar (font/size selects); blur deferral avoids closing before native `<select>` opens. */
+  const textToolbarRef = useRef<HTMLDivElement>(null)
 
   const editingLive = useMemo(() => {
     if (!editing) return null
@@ -1522,6 +1689,11 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
     size.w,
     size.h,
     editText,
+    editFontSize,
+    editFontFamily,
+    editFontStyle,
+    editTextAlign,
+    editTextColor,
     editLayoutTick,
   ])
 
@@ -1536,7 +1708,26 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
       setEditLayoutTick((n) => n + 1)
     })
     return () => cancelAnimationFrame(id)
-  }, [editing?.id, editing?.kind])
+  }, [
+    editing?.id,
+    editing?.kind,
+    editFontSize,
+    editFontFamily,
+    editFontStyle,
+    editTextColor,
+  ])
+
+  useEffect(() => {
+    if (!textColorMenuOpen) return
+    const onDocMouseDown = (e: MouseEvent) => {
+      const root = textColorMenuRef.current
+      if (root && !root.contains(e.target as Node)) {
+        setTextColorMenuOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', onDocMouseDown)
+    return () => document.removeEventListener('mousedown', onDocMouseDown)
+  }, [textColorMenuOpen])
 
   const textareaPaddingStyle = useMemo((): CSSProperties => {
     if (!editing) return {}
@@ -1559,24 +1750,54 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
 
   const onEditRequest = (el: CanvasElement) => {
     if (el.kind === 'image') return
+    setTextColorMenuOpen(false)
     setEditing(el)
     setEditText(el.text)
+    if (el.kind === 'text') {
+      setEditFontSize(coerceToolbarFontSize(resolveTextFontSize(el)))
+      setEditFontFamily(normalizeEditFontFamily(resolveTextFontFamily(el)))
+      setEditFontStyle(resolveTextFontStyle(el))
+      setEditTextAlign(resolveTextAlign(el))
+      setEditTextColor(el.color)
+    }
   }
 
   const closeEdit = () => {
+    setTextColorMenuOpen(false)
     if (!editing) return
     const id = editing.id
     const text = editText
     const kind = editing.kind
+    const fs = editFontSize
+    const ff = editFontFamily
+    const fst = editFontStyle
+    const ta = editTextAlign
+    const tc = editTextColor
     setEditing(null)
     commit((d) => {
       const found = d.elements.find((x) => x.id === id)
       if (found) {
         found.text = text
         if (kind === 'text') {
-          found.height = measureTextBlockHeight(text, found.width)
+          found.fontSize = fs
+          found.fontFamily = ff
+          found.fontStyle = fst
+          found.textAlign = ta
+          found.color = tc
+          found.height = measureTextBlockHeight(text, found.width, fs, ff, fst)
         }
       }
+    })
+  }
+
+  const handleTextareaBlur = () => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const ae = document.activeElement
+        if (ae && textToolbarRef.current?.contains(ae)) return
+        if (ae === textEditRef.current) return
+        closeEdit()
+      })
     })
   }
 
@@ -1624,7 +1845,13 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
         f.width = prev.width
         f.height = prev.height
         if (f.kind === 'text') {
-          f.height = measureTextBlockHeight(f.text, f.width)
+          f.height = measureTextBlockHeight(
+            f.text,
+            f.width,
+            resolveTextFontSize(f),
+            resolveTextFontFamily(f),
+            resolveTextFontStyle(f),
+          )
         }
       }
     })
@@ -1918,6 +2145,377 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
         ) : null}
       </Stage>
 
+      {editing?.kind === 'text' && editLayout ? (
+        <div
+          ref={textToolbarRef}
+          role="toolbar"
+          aria-label="Text formatting"
+          style={{
+            position: 'fixed',
+            left: editLayout.left,
+            top: Math.max(8, editLayout.top - 54),
+            zIndex: 1250,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 0,
+            padding: '5px 8px',
+            background: '#262626',
+            borderRadius: 10,
+            boxShadow:
+              '0 4px 20px rgba(0,0,0,0.28), 0 0 0 1px rgba(255,255,255,0.06)',
+            fontFamily: UI_SANS,
+            pointerEvents: 'auto',
+          }}
+        >
+          <div
+            ref={textColorMenuRef}
+            style={{ position: 'relative', flexShrink: 0 }}
+          >
+            <button
+              type="button"
+              aria-label="Text color"
+              aria-haspopup="listbox"
+              aria-expanded={textColorMenuOpen}
+              title="Text color"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => setTextColorMenuOpen((o) => !o)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 4,
+                padding: '2px 4px',
+                border: 'none',
+                borderRadius: 6,
+                cursor: 'pointer',
+                background: textColorMenuOpen
+                  ? 'rgba(255,255,255,0.12)'
+                  : 'transparent',
+                color: '#fafafa',
+              }}
+            >
+              <span
+                style={{
+                  width: 22,
+                  height: 22,
+                  borderRadius: '50%',
+                  background: editTextColor,
+                  boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.25)',
+                  flexShrink: 0,
+                }}
+              />
+              <svg
+                width="10"
+                height="10"
+                viewBox="0 0 12 12"
+                fill="none"
+                aria-hidden
+                style={{
+                  opacity: 0.85,
+                  transform: textColorMenuOpen
+                    ? 'rotate(180deg)'
+                    : 'rotate(0deg)',
+                  transition: 'transform 0.15s ease',
+                }}
+              >
+                <path
+                  d="M2.5 4.25L6 7.75l3.5-3.5"
+                  stroke="currentColor"
+                  strokeWidth="1.25"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </button>
+            {textColorMenuOpen ? (
+              <div
+                role="listbox"
+                aria-label="Choose text color"
+                style={{
+                  position: 'absolute',
+                  top: 'calc(100% + 6px)',
+                  left: 0,
+                  zIndex: 1300,
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  gap: 8,
+                  padding: 10,
+                  width: 168,
+                  boxSizing: 'border-box',
+                  background: '#1a1a1a',
+                  borderRadius: 10,
+                  border: '1px solid rgba(255,255,255,0.12)',
+                  boxShadow: '0 8px 24px rgba(0,0,0,0.35)',
+                }}
+              >
+                {TEXT_COLORS.map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    role="option"
+                    aria-selected={editTextColor === c}
+                    title={c}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      setEditTextColor(c)
+                      setEditLayoutTick((n) => n + 1)
+                      setTextColorMenuOpen(false)
+                    }}
+                    style={{
+                      width: 30,
+                      height: 30,
+                      padding: 0,
+                      border:
+                        editTextColor === c
+                          ? '2px solid #fafafa'
+                          : '2px solid transparent',
+                      borderRadius: '50%',
+                      background: c,
+                      cursor: 'pointer',
+                      boxSizing: 'border-box',
+                      boxShadow: 'inset 0 0 0 1px rgba(0,0,0,0.15)',
+                    }}
+                  />
+                ))}
+              </div>
+            ) : null}
+          </div>
+          <span
+            aria-hidden
+            style={{
+              width: 1,
+              height: 22,
+              background: 'rgba(255,255,255,0.12)',
+              margin: '0 8px',
+              flexShrink: 0,
+            }}
+          />
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 4,
+              color: '#fafafa',
+            }}
+          >
+            <span style={{ display: 'flex', opacity: 0.9 }} aria-hidden>
+              <IconFigjamAa />
+            </span>
+            <select
+              aria-label="Font family"
+              value={
+                TEXT_FONT_PRESETS.find((p) => p.family === editFontFamily)
+                  ?.id ?? TEXT_FONT_PRESETS[0].id
+              }
+              onChange={(e) => {
+                const p = TEXT_FONT_PRESETS.find(
+                  (x) => x.id === e.target.value,
+                )
+                if (p) {
+                  setEditFontFamily(p.family)
+                  setEditLayoutTick((n) => n + 1)
+                }
+              }}
+              style={{ ...figjamTextToolbarSelect, minWidth: 118 }}
+            >
+              {TEXT_FONT_PRESETS.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <span
+            aria-hidden
+            style={{
+              width: 1,
+              height: 22,
+              background: 'rgba(255,255,255,0.12)',
+              margin: '0 8px',
+              flexShrink: 0,
+            }}
+          />
+          <select
+            aria-label="Text size"
+            value={String(editFontSize)}
+            onChange={(e) => {
+              setEditFontSize(Number(e.target.value))
+              setEditLayoutTick((n) => n + 1)
+            }}
+            style={{ ...figjamTextToolbarSelect, minWidth: 112 }}
+          >
+            {TEXT_SIZE_OPTIONS.map(({ px, label }) => (
+              <option key={px} value={String(px)}>
+                {label}
+              </option>
+            ))}
+          </select>
+          <span
+            aria-hidden
+            style={{
+              width: 1,
+              height: 22,
+              background: 'rgba(255,255,255,0.12)',
+              margin: '0 8px',
+              flexShrink: 0,
+            }}
+          />
+          <button
+            type="button"
+            title="Bold"
+            aria-pressed={
+              editFontStyle === 'bold' || editFontStyle === 'bold italic'
+            }
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => {
+              setEditFontStyle((s) => toggleTextBold(s))
+              setEditLayoutTick((n) => n + 1)
+            }}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 28,
+              height: 28,
+              padding: 0,
+              border: 'none',
+              borderRadius: 6,
+              cursor: 'pointer',
+              color: '#fafafa',
+              background:
+                editFontStyle === 'bold' || editFontStyle === 'bold italic'
+                  ? 'rgba(255,255,255,0.14)'
+                  : 'transparent',
+            }}
+          >
+            <IconFigjamBold />
+          </button>
+          <button
+            type="button"
+            title="Italic"
+            aria-pressed={
+              editFontStyle === 'italic' || editFontStyle === 'bold italic'
+            }
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => {
+              setEditFontStyle((s) => toggleTextItalic(s))
+              setEditLayoutTick((n) => n + 1)
+            }}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 28,
+              height: 28,
+              padding: 0,
+              border: 'none',
+              borderRadius: 6,
+              cursor: 'pointer',
+              color: '#fafafa',
+              background:
+                editFontStyle === 'italic' || editFontStyle === 'bold italic'
+                  ? 'rgba(255,255,255,0.14)'
+                  : 'transparent',
+            }}
+          >
+            <IconFigjamItalic />
+          </button>
+          <span
+            aria-hidden
+            style={{
+              width: 1,
+              height: 22,
+              background: 'rgba(255,255,255,0.12)',
+              margin: '0 8px',
+              flexShrink: 0,
+            }}
+          />
+          <button
+            type="button"
+            title="Align left"
+            aria-pressed={editTextAlign === 'left'}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => {
+              setEditTextAlign('left')
+              setEditLayoutTick((n) => n + 1)
+            }}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 28,
+              height: 28,
+              padding: 0,
+              border: 'none',
+              borderRadius: 6,
+              cursor: 'pointer',
+              color: '#fafafa',
+              background:
+                editTextAlign === 'left'
+                  ? 'rgba(255,255,255,0.14)'
+                  : 'transparent',
+            }}
+          >
+            <IconFigjamAlignLeft />
+          </button>
+          <button
+            type="button"
+            title="Align center"
+            aria-pressed={editTextAlign === 'center'}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => {
+              setEditTextAlign('center')
+              setEditLayoutTick((n) => n + 1)
+            }}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 28,
+              height: 28,
+              padding: 0,
+              border: 'none',
+              borderRadius: 6,
+              cursor: 'pointer',
+              color: '#fafafa',
+              background:
+                editTextAlign === 'center'
+                  ? 'rgba(255,255,255,0.14)'
+                  : 'transparent',
+            }}
+          >
+            <IconFigjamAlignCenter />
+          </button>
+          <button
+            type="button"
+            title="Align right"
+            aria-pressed={editTextAlign === 'right'}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => {
+              setEditTextAlign('right')
+              setEditLayoutTick((n) => n + 1)
+            }}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 28,
+              height: 28,
+              padding: 0,
+              border: 'none',
+              borderRadius: 6,
+              cursor: 'pointer',
+              color: '#fafafa',
+              background:
+                editTextAlign === 'right'
+                  ? 'rgba(255,255,255,0.14)'
+                  : 'transparent',
+            }}
+          >
+            <IconFigjamAlignRight />
+          </button>
+        </div>
+      ) : null}
+
       {editLayout ? (
         <textarea
           ref={textEditRef}
@@ -1929,13 +2527,26 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
             height: editLayout.height,
             zIndex: 1200,
             resize: 'none',
-            fontSize: editing?.kind === 'text' ? TEXT_FONT_SIZE : 13,
+            fontSize:
+              editing?.kind === 'text' ? editFontSize : 13,
             lineHeight: editing?.kind === 'text' ? TEXT_LINE_HEIGHT : 1.45,
             fontFamily:
               editing?.kind === 'text'
-                ? TEXT_FONT_FAMILY
-                : 'system-ui, Inter, sans-serif',
-            color: editing?.kind === 'text' ? editing.color : '#111827',
+                ? editFontFamily
+                : UI_SANS,
+            fontWeight:
+              editing?.kind === 'text' &&
+              (editFontStyle === 'bold' || editFontStyle === 'bold italic')
+                ? 'bold'
+                : 'normal',
+            fontStyle:
+              editing?.kind === 'text' &&
+              (editFontStyle === 'italic' || editFontStyle === 'bold italic')
+                ? 'italic'
+                : 'normal',
+            textAlign:
+              editing?.kind === 'text' ? editTextAlign : undefined,
+            color: editing?.kind === 'text' ? editTextColor : '#111827',
             border: 'none',
             outline: 'none',
             background: 'transparent',
@@ -1944,7 +2555,7 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
             overflow: editing?.kind === 'text' ? 'hidden' : undefined,
             boxShadow:
               editing?.kind === 'text'
-                ? '0 0 0 1px rgba(120, 58, 233, 0.4)'
+                ? '0 0 0 1px #3b82f6'
                 : undefined,
             borderRadius: editing?.kind === 'text' ? 2 : undefined,
             ...textareaPaddingStyle,
@@ -1960,7 +2571,7 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
               setEditLayoutTick((n) => n + 1)
             }
           }}
-          onBlur={closeEdit}
+          onBlur={handleTextareaBlur}
           onKeyDown={(ev) => {
             if (ev.key === 'Escape') {
               ev.preventDefault()
@@ -2139,7 +2750,7 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
             borderRadius: 8,
             boxShadow: '0 4px 20px rgba(0,0,0,0.18)',
             pointerEvents: 'none',
-            fontFamily: 'system-ui, Inter, sans-serif',
+            fontFamily: UI_SANS,
           }}
         >
           {boardDropMessage}
