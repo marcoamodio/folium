@@ -1,6 +1,5 @@
 import Konva from 'konva'
-import type { CSSProperties } from 'react'
-import type { ChangeEvent } from 'react'
+import type { CSSProperties, ChangeEvent, DragEvent as ReactDragEvent } from 'react'
 import {
   useCallback,
   useEffect,
@@ -9,12 +8,15 @@ import {
   useRef,
   useState,
 } from 'react'
-import { Group, Layer, Rect, Stage, Text } from 'react-konva'
+import { flushSync } from 'react-dom'
+import { Group, Image as KonvaImage, Layer, Rect, Stage, Text } from 'react-konva'
 import { subscribeCanvasPersistence } from './canvasPersistence'
 import type { CanvasElement, CanvasState, ElementKind } from './types'
 import {
+  ALLOWED_IMAGE_MIME_TYPES,
   CARD_COLORS,
   ELEMENT_DEFAULTS,
+  MAX_IMAGE_UPLOAD_BYTES,
   NOTE_COLORS,
   TASK_ACCENT_COLORS,
   TEXT_COLORS,
@@ -40,6 +42,125 @@ const TEXT_PAD_Y = 4
 const FIGJAM_TEXT_STROKE = '#783ae9'
 const FIGJAM_PLACEHOLDER = '#a3a3a3'
 
+/** Longest edge in world px when placing a dropped image (keeps board + IDB payload reasonable). */
+const IMAGE_MAX_WORLD_EDGE = 720
+
+const ALLOWED_IMAGE_MIME_SET = new Set<string>(ALLOWED_IMAGE_MIME_TYPES)
+
+function imageExtensionOk(name: string): boolean {
+  return /\.(jpe?g|png|gif|webp)$/i.test(name)
+}
+
+/** Accept for drop: allowed MIME, size cap, or unknown MIME with safe extension (some OS omit type). */
+function isAcceptedBoardImageFile(file: File): boolean {
+  if (file.size > MAX_IMAGE_UPLOAD_BYTES) return false
+  if (ALLOWED_IMAGE_MIME_SET.has(file.type)) return true
+  if (!file.type && imageExtensionOk(file.name)) return true
+  return false
+}
+
+function looksLikeImageAttempt(file: File): boolean {
+  if (file.type.startsWith('image/')) return true
+  return imageExtensionOk(file.name)
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader()
+    r.onload = () => resolve(r.result as string)
+    r.onerror = () => reject(r.error)
+    r.readAsDataURL(file)
+  })
+}
+
+function naturalSizeFromDataUrl(dataUrl: string): Promise<{ w: number; h: number }> {
+  return new Promise((resolve, reject) => {
+    const img = new window.Image()
+    img.onload = () =>
+      resolve({ w: img.naturalWidth, h: img.naturalHeight })
+    img.onerror = () => reject(new Error('image-decode'))
+    img.src = dataUrl
+  })
+}
+
+function worldSizeForImage(nw: number, nh: number): { width: number; height: number } {
+  const maxEdge = Math.max(nw, nh, 1)
+  const scale = Math.min(1, IMAGE_MAX_WORLD_EDGE / maxEdge)
+  const width = Math.max(MIN_ELEMENT_W, Math.round(nw * scale))
+  const height = Math.max(MIN_ELEMENT_H, Math.round(nh * scale))
+  return { width, height }
+}
+
+function createImageElement(
+  cx: number,
+  cy: number,
+  imageSrc: string,
+  nw: number,
+  nh: number,
+  indexOffset: number,
+): CanvasElement {
+  const { width, height } = worldSizeForImage(nw, nh)
+  const d = ELEMENT_DEFAULTS.image
+  const stagger = indexOffset * 24
+  return {
+    id: crypto.randomUUID(),
+    kind: 'image',
+    x: cx - width / 2 + stagger,
+    y: cy - height / 2 + stagger,
+    width,
+    height,
+    text: d.text,
+    color: d.color,
+    imageSrc,
+  }
+}
+
+function BoardRasterImage({
+  src,
+  width,
+  height,
+}: {
+  src: string
+  width: number
+  height: number
+}) {
+  const [img, setImg] = useState<HTMLImageElement | null>(null)
+  useEffect(() => {
+    const image = new window.Image()
+    let cancelled = false
+    image.onload = () => {
+      if (!cancelled) setImg(image)
+    }
+    image.onerror = () => {
+      if (!cancelled) setImg(null)
+    }
+    image.src = src
+    return () => {
+      cancelled = true
+    }
+  }, [src])
+  if (!img) {
+    return (
+      <Rect
+        width={width}
+        height={height}
+        fill="#f3f4f6"
+        cornerRadius={6}
+        listening={false}
+      />
+    )
+  }
+  return (
+    <KonvaImage
+      image={img}
+      width={width}
+      height={height}
+      cornerRadius={6}
+      listening={false}
+    />
+  )
+}
+
 function measureTextBlockHeight(text: string, boxWidth: number): number {
   const innerW = Math.max(16, boxWidth - TEXT_PAD_X * 2)
   const node = new Konva.Text({
@@ -63,6 +184,9 @@ function clamp(n: number, min: number, max: number): number {
 }
 
 function createElement(kind: ElementKind, cx: number, cy: number): CanvasElement {
+  if (kind === 'image') {
+    throw new Error('createElement: images are added via drag-and-drop')
+  }
   const d = ELEMENT_DEFAULTS[kind]
   if (kind === 'text') {
     return {
@@ -230,11 +354,21 @@ function targetIsBoardBackground(
   return target === stage
 }
 
+function isSpaceReservedForTyping(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false
+  const tag = target.tagName
+  if (tag === 'INPUT' || tag === 'TEXTAREA') return true
+  if (target.isContentEditable) return true
+  return false
+}
+
 type CanvasElementNodeProps = {
   el: CanvasElement
   display: CanvasElement
   selected: boolean
   editing: boolean
+  /** FigJam-style: Space = hand tool; elements ignore pointer so pan works on top of them. */
+  handMode: boolean
   onSelect: (id: string) => void
   onDragStart: (id: string) => void
   onDragEnd: (id: string, x: number, y: number) => void
@@ -246,20 +380,30 @@ function CanvasElementNode({
   display,
   selected,
   editing,
+  handMode,
   onSelect,
   onDragStart,
   onDragEnd,
   onEditRequest,
 }: CanvasElementNodeProps) {
+  const canInteract = !handMode
+  const stopBubbleForItemDrag = (
+    e: Konva.KonvaEventObject<MouseEvent>,
+  ) => {
+    const b = e.evt.button
+    if (b === 1) return
+    if (b !== 0) return
+    if (handMode) return
+    e.cancelBubble = true
+  }
   if (display.kind === 'note') {
     return (
       <Group
         x={display.x}
         y={display.y}
-        draggable
-        onMouseDown={(e: Konva.KonvaEventObject<MouseEvent>) => {
-          e.cancelBubble = true
-        }}
+        listening={canInteract}
+        draggable={canInteract}
+        onMouseDown={stopBubbleForItemDrag}
         onClick={(e: Konva.KonvaEventObject<MouseEvent>) => {
           if (e.evt.button !== 0) return
           e.cancelBubble = true
@@ -324,10 +468,9 @@ function CanvasElementNode({
       <Group
         x={display.x}
         y={display.y}
-        draggable
-        onMouseDown={(e: Konva.KonvaEventObject<MouseEvent>) => {
-          e.cancelBubble = true
-        }}
+        listening={canInteract}
+        draggable={canInteract}
+        onMouseDown={stopBubbleForItemDrag}
         onClick={(e: Konva.KonvaEventObject<MouseEvent>) => {
           if (e.evt.button !== 0) return
           e.cancelBubble = true
@@ -379,10 +522,9 @@ function CanvasElementNode({
       <Group
         x={display.x}
         y={display.y}
-        draggable
-        onMouseDown={(e: Konva.KonvaEventObject<MouseEvent>) => {
-          e.cancelBubble = true
-        }}
+        listening={canInteract}
+        draggable={canInteract}
+        onMouseDown={stopBubbleForItemDrag}
         onClick={(e: Konva.KonvaEventObject<MouseEvent>) => {
           if (e.evt.button !== 0) return
           e.cancelBubble = true
@@ -433,14 +575,67 @@ function CanvasElementNode({
     )
   }
 
+  if (display.kind === 'image') {
+    const src = display.imageSrc ?? ''
+    return (
+      <Group
+        x={display.x}
+        y={display.y}
+        listening={canInteract}
+        draggable={canInteract}
+        onMouseDown={stopBubbleForItemDrag}
+        onClick={(e: Konva.KonvaEventObject<MouseEvent>) => {
+          if (e.evt.button !== 0) return
+          e.cancelBubble = true
+          onSelect(el.id)
+        }}
+        onDragStart={() => onDragStart(el.id)}
+        onDragEnd={(e: Konva.KonvaEventObject<DragEvent>) => {
+          onDragEnd(el.id, e.target.x(), e.target.y())
+        }}
+      >
+        {/* Konva needs a listening child for hit tests; Image is non-listening for perf. */}
+        <Rect
+          width={display.width}
+          height={display.height}
+          cornerRadius={6}
+          fill="rgba(0,0,0,0.01)"
+        />
+        {src ? (
+          <BoardRasterImage
+            src={src}
+            width={display.width}
+            height={display.height}
+          />
+        ) : (
+          <Rect
+            width={display.width}
+            height={display.height}
+            fill="#e5e7eb"
+            cornerRadius={6}
+            listening={false}
+          />
+        )}
+        <Rect
+          width={display.width}
+          height={display.height}
+          cornerRadius={6}
+          fill="rgba(0,0,0,0)"
+          stroke={selected ? '#3b82f6' : '#e5e7eb'}
+          strokeWidth={selected ? 2 : 1}
+          listening={false}
+        />
+      </Group>
+    )
+  }
+
   return (
     <Group
       x={display.x}
       y={display.y}
-      draggable
-      onMouseDown={(e: Konva.KonvaEventObject<MouseEvent>) => {
-        e.cancelBubble = true
-      }}
+      listening={canInteract}
+      draggable={canInteract}
+      onMouseDown={stopBubbleForItemDrag}
       onClick={(e: Konva.KonvaEventObject<MouseEvent>) => {
         if (e.evt.button !== 0) return
         e.cancelBubble = true
@@ -503,6 +698,7 @@ const HANDLE_POSITIONS: HandleId[] = [
 function ResizeHandlesLayer({
   el,
   viewport,
+  handMode,
   onResizeStart,
   onResizeMove,
   onResizeEnd,
@@ -510,11 +706,13 @@ function ResizeHandlesLayer({
 }: {
   el: CanvasElement
   viewport: CanvasState['viewport']
+  handMode: boolean
   onResizeStart: (handle: HandleId) => void
   onResizeMove: (handle: HandleId, wx: number, wy: number) => void
   onResizeEnd: () => void
   onHoverHandle: (handle: HandleId | null) => void
 }) {
+  const handlesActive = !handMode
   const { x, y, width: w, height: h } = el
   const half = HANDLE_SIZE / 2
   const cx = (hx: number, hy: number) => ({ hx: hx - half, hy: hy - half })
@@ -545,7 +743,8 @@ function ResizeHandlesLayer({
             stroke="#3b82f6"
             strokeWidth={1.5}
             cornerRadius={2}
-            draggable
+            listening={handlesActive}
+            draggable={handlesActive}
             onMouseEnter={() => onHoverHandle(hid)}
             onMouseLeave={() => onHoverHandle(null)}
             onDragStart={() => onResizeStart(hid)}
@@ -575,10 +774,13 @@ const leftToolbarStyle: CSSProperties = {
   gap: 6,
   padding: '8px 6px',
   background: '#ffffff',
+  backgroundColor: '#ffffff',
+  backgroundImage: 'none',
   borderRadius: 12,
   border: '1px solid #e5e7eb',
   boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
   pointerEvents: 'auto',
+  overflow: 'hidden',
 }
 
 const toolBtnBase: CSSProperties = {
@@ -606,10 +808,13 @@ const zoomBarStyle: CSSProperties = {
   gap: 2,
   padding: '4px 6px',
   background: '#ffffff',
+  backgroundColor: '#ffffff',
+  backgroundImage: 'none',
   borderRadius: 8,
   border: '1px solid #e5e7eb',
   boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
   pointerEvents: 'auto',
+  overflow: 'hidden',
 }
 
 const zoomBtnStyle: CSSProperties = {
@@ -634,6 +839,10 @@ const zoomPercentStyle: CSSProperties = {
   color: '#374151',
   fontFamily: 'system-ui, Inter, sans-serif',
   userSelect: 'none',
+  background: 'transparent',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
 }
 
 const swatchPanelStyle: CSSProperties = {
@@ -836,6 +1045,7 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
   const viewportUiRef = useRef({ x: 0, y: 0, scale: 1 })
   const resizePreviewRef = useRef<CanvasElement | null>(null)
   const spaceDown = useRef(false)
+  const [handMode, setHandMode] = useState(false)
 
   const listenersRef = useRef(new Set<() => void>())
   const emit = useCallback(() => {
@@ -1047,9 +1257,10 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
     const stage = e.target.getStage()
     if (!stage) return
     const onBg = targetIsBoardBackground(e.target, stage)
-    const canPan =
-      onBg &&
-      (e.evt.button === 1 || (e.evt.button === 0 && spaceDown.current))
+    const panInput =
+      e.evt.button === 1 ||
+      (e.evt.button === 0 && spaceDown.current)
+    const canPan = panInput && !editing
     if (canPan) {
       e.evt.preventDefault()
       panning.current = true
@@ -1085,7 +1296,14 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
 
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
-      if (e.code === 'Space') spaceDown.current = true
+      if (e.code === 'Space') {
+        if (isSpaceReservedForTyping(e.target)) return
+        e.preventDefault()
+        spaceDown.current = true
+        setHoverHandle(null)
+        flushSync(() => setHandMode(true))
+        return
+      }
       const mod = e.metaKey || e.ctrlKey
       if (mod && e.key === 'z') {
         e.preventDefault()
@@ -1098,13 +1316,22 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
       }
     }
     const up = (e: KeyboardEvent) => {
-      if (e.code === 'Space') spaceDown.current = false
+      if (e.code === 'Space') {
+        spaceDown.current = false
+        flushSync(() => setHandMode(false))
+      }
+    }
+    const onWinBlur = () => {
+      spaceDown.current = false
+      flushSync(() => setHandMode(false))
     }
     window.addEventListener('keydown', down)
     window.addEventListener('keyup', up)
+    window.addEventListener('blur', onWinBlur)
     return () => {
       window.removeEventListener('keydown', down)
       window.removeEventListener('keyup', up)
+      window.removeEventListener('blur', onWinBlur)
     }
   }, [undo, redo, clearMarqueeSession])
 
@@ -1210,6 +1437,7 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
     const stage = e.target.getStage()
     if (!stage || !targetIsBoardBackground(e.target, stage)) return
     if (e.evt.button !== 0) return
+    if (spaceDown.current) return
     if (activeTool !== 'select') {
       const w = worldFromPointer(stage, viewportMemo)
       if (!w) return
@@ -1330,6 +1558,7 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
   }, [editing])
 
   const onEditRequest = (el: CanvasElement) => {
+    if (el.kind === 'image') return
     setEditing(el)
     setEditText(el.text)
   }
@@ -1428,6 +1657,100 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
             ? TEXT_COLORS
             : []
 
+  const [boardDropMessage, setBoardDropMessage] = useState<string | null>(null)
+  const boardDropMsgTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  )
+
+  const showBoardDropMessage = useCallback((msg: string) => {
+    if (boardDropMsgTimerRef.current) {
+      clearTimeout(boardDropMsgTimerRef.current)
+    }
+    setBoardDropMessage(msg)
+    boardDropMsgTimerRef.current = setTimeout(() => {
+      setBoardDropMessage(null)
+      boardDropMsgTimerRef.current = null
+    }, 4800)
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      if (boardDropMsgTimerRef.current) {
+        clearTimeout(boardDropMsgTimerRef.current)
+      }
+    }
+  }, [])
+
+  const clientPointToWorld = useCallback(
+    (clientX: number, clientY: number) => {
+      const stage = stageRef.current
+      if (!stage) return null
+      const { x: vxx, y: vyy, scale } = viewportUiRef.current
+      const rect = stage.container().getBoundingClientRect()
+      const px = clientX - rect.left
+      const py = clientY - rect.top
+      return { wx: (px - vxx) / scale, wy: (py - vyy) / scale }
+    },
+    [],
+  )
+
+  const handleBoardDragOver = useCallback((e: ReactDragEvent<HTMLDivElement>) => {
+    const types = Array.from(e.dataTransfer?.types ?? [])
+    if (!types.includes('Files')) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'copy'
+  }, [])
+
+  const handleBoardDrop = useCallback(
+    async (e: ReactDragEvent<HTMLDivElement>) => {
+      e.preventDefault()
+      const stage = stageRef.current
+      if (!stage) return
+      const list = Array.from(e.dataTransfer.files)
+      if (list.length === 0) return
+      const pos = clientPointToWorld(e.clientX, e.clientY)
+      if (!pos) return
+
+      let skipped = 0
+      const additions: CanvasElement[] = []
+      let addIndex = 0
+      for (const file of list) {
+        if (!looksLikeImageAttempt(file)) continue
+        if (!isAcceptedBoardImageFile(file)) {
+          skipped++
+          continue
+        }
+        try {
+          const dataUrl = await readFileAsDataUrl(file)
+          const { w, h } = await naturalSizeFromDataUrl(dataUrl)
+          additions.push(
+            createImageElement(pos.wx, pos.wy, dataUrl, w, h, addIndex),
+          )
+          addIndex++
+        } catch {
+          skipped++
+        }
+      }
+      if (additions.length > 0) {
+        commit((d) => {
+          for (const el of additions) d.elements.push(el)
+        })
+        setSelectedIds(additions.map((x) => x.id))
+        setActiveTool('select')
+      }
+      const triedImages = list.filter(looksLikeImageAttempt).length
+      if (skipped > 0 && triedImages > 0) {
+        const mb = Math.round(MAX_IMAGE_UPLOAD_BYTES / (1024 * 1024))
+        showBoardDropMessage(
+          additions.length === 0
+            ? `Could not add image(s). Max ${mb} MB each; use JPEG, PNG, WebP, or GIF.`
+            : `${skipped} file(s) skipped. Max ${mb} MB each; JPEG, PNG, WebP, or GIF only.`,
+        )
+      }
+    },
+    [clientPointToWorld, commit, showBoardDropMessage],
+  )
+
   const updateCursor = useCallback(() => {
     const container = stageRef.current?.container()
     if (!container) return
@@ -1443,7 +1766,7 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
       container.style.cursor = 'crosshair'
       return
     }
-    if (spaceDown.current) {
+    if (handMode) {
       container.style.cursor = panning.current ? 'grabbing' : 'grab'
       return
     }
@@ -1466,6 +1789,7 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
     editing,
     hoverElement,
     hoverHandle,
+    handMode,
     marquee,
   ])
 
@@ -1515,9 +1839,16 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
   }
 
   return (
-    <div ref={wrapRef} className="folium-board-bg" style={boardSurfaceStyle}>
+    <div
+      ref={wrapRef}
+      className="folium-board-bg"
+      style={boardSurfaceStyle}
+      onDragOver={handleBoardDragOver}
+      onDrop={handleBoardDrop}
+    >
       <Stage
         ref={stageRef}
+        className="folium-konva-root"
         width={size.w}
         height={size.h}
         x={vx}
@@ -1561,6 +1892,7 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
               display={displayElement(el)}
               selected={effectiveSelectedIds.includes(el.id)}
               editing={editing?.id === el.id}
+              handMode={handMode}
               onSelect={(id) => setSelectedIds([id])}
               onDragStart={(id) => {
                 setDraggingElementId(id)
@@ -1576,6 +1908,7 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
             <ResizeHandlesLayer
               el={displayElement(singleSelectedEl)}
               viewport={viewportMemo}
+              handMode={handMode}
               onResizeStart={onResizeStart}
               onResizeMove={onResizeMove}
               onResizeEnd={onResizeEnd}
@@ -1786,6 +2119,32 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
           <IconZoomIn />
         </button>
       </div>
+
+      {boardDropMessage ? (
+        <div
+          role="status"
+          aria-live="polite"
+          style={{
+            position: 'fixed',
+            bottom: 56,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 2000,
+            maxWidth: 440,
+            padding: '10px 16px',
+            background: '#1f2937',
+            color: '#f9fafb',
+            fontSize: 13,
+            lineHeight: 1.4,
+            borderRadius: 8,
+            boxShadow: '0 4px 20px rgba(0,0,0,0.18)',
+            pointerEvents: 'none',
+            fontFamily: 'system-ui, Inter, sans-serif',
+          }}
+        >
+          {boardDropMessage}
+        </div>
+      ) : null}
     </div>
   )
 }

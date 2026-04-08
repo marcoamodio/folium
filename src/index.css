@@ -107,8 +107,10 @@ body,
   min-width: 100%;
 }
 
-/* Konva (react-konva): stage container + content must not paint an opaque plate */
-.folium-board-bg > div {
+/* Konva (react-konva): only the stage root must stay transparent so dots show through.
+   Do not use .folium-board-bg > div — it overrides toolbar/chrome backgrounds (inline
+   styles lose to !important here). */
+.folium-board-bg > .folium-konva-root {
   background: transparent !important;
 }
 

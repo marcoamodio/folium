@@ -1,4 +1,4 @@
-export type ElementKind = 'note' | 'task' | 'card' | 'text'
+export type ElementKind = 'note' | 'task' | 'card' | 'text' | 'image'
 
 export interface CanvasElement {
   id: string
@@ -10,7 +10,22 @@ export interface CanvasElement {
   text: string
   /** Fill (note/card) or left accent bar color (task). */
   color: string
+  /**
+   * Raster image as data URL (`image/jpeg` | `png` | `webp` | `gif`).
+   * Present only when `kind === 'image'`.
+   */
+  imageSrc?: string
 }
+
+/** Max encoded size per dropped image file (client-side canvas + encrypted IDB). */
+export const MAX_IMAGE_UPLOAD_BYTES = 5 * 1024 * 1024
+
+export const ALLOWED_IMAGE_MIME_TYPES = [
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/gif',
+] as const
 
 export interface CanvasState {
   elements: CanvasElement[]
@@ -90,25 +105,43 @@ export const ELEMENT_DEFAULTS: Record<
     text: '',
     color: TEXT_COLORS[0],
   },
+  image: {
+    width: 320,
+    height: 240,
+    text: '',
+    color: '#e5e7eb',
+  },
 }
 
 function isElementKind(v: unknown): v is ElementKind {
-  return v === 'note' || v === 'task' || v === 'card' || v === 'text'
+  return (
+    v === 'note' ||
+    v === 'task' ||
+    v === 'card' ||
+    v === 'text' ||
+    v === 'image'
+  )
 }
 
 function isCanvasElement(v: unknown): v is CanvasElement {
   if (!v || typeof v !== 'object') return false
   const o = v as Record<string, unknown>
-  return (
-    typeof o.id === 'string' &&
-    isElementKind(o.kind) &&
-    typeof o.x === 'number' &&
-    typeof o.y === 'number' &&
-    typeof o.width === 'number' &&
-    typeof o.height === 'number' &&
-    typeof o.text === 'string' &&
-    typeof o.color === 'string'
-  )
+  if (
+    typeof o.id !== 'string' ||
+    !isElementKind(o.kind) ||
+    typeof o.x !== 'number' ||
+    typeof o.y !== 'number' ||
+    typeof o.width !== 'number' ||
+    typeof o.height !== 'number' ||
+    typeof o.text !== 'string' ||
+    typeof o.color !== 'string'
+  ) {
+    return false
+  }
+  if (o.kind === 'image') {
+    return typeof o.imageSrc === 'string' && o.imageSrc.length > 0
+  }
+  return o.imageSrc === undefined || typeof o.imageSrc === 'string'
 }
 
 export function isCanvasState(v: unknown): v is CanvasState {
