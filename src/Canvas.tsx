@@ -1,4 +1,11 @@
 import Konva from 'konva'
+import {
+  ListChecks,
+  MousePointer2,
+  Square,
+  StickyNote,
+  Type,
+} from 'lucide-react'
 import type { CSSProperties, ChangeEvent, DragEvent as ReactDragEvent } from 'react'
 import {
   useCallback,
@@ -837,6 +844,10 @@ function ResizeHandlesLayer({
   )
 }
 
+/** Left tool rail: larger hit targets (~FigJam / 44px+ touch). */
+const SIDENAV_BTN_PX = 48
+const SIDENAV_ICON_PX = 24
+
 const leftToolbarStyle: CSSProperties = {
   position: 'fixed',
   left: 16,
@@ -845,22 +856,24 @@ const leftToolbarStyle: CSSProperties = {
   zIndex: 1100,
   display: 'flex',
   flexDirection: 'column',
-  gap: 6,
-  padding: '8px 6px',
+  gap: 10,
+  padding: '12px 10px',
   background: '#ffffff',
   backgroundColor: '#ffffff',
   backgroundImage: 'none',
-  borderRadius: 12,
+  borderRadius: 14,
   border: '1px solid #e5e7eb',
-  boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
+  boxShadow: '0 2px 12px rgba(0,0,0,0.08)',
   pointerEvents: 'auto',
   overflow: 'hidden',
 }
 
 const toolBtnBase: CSSProperties = {
-  width: 36,
-  height: 36,
-  borderRadius: 8,
+  width: SIDENAV_BTN_PX,
+  height: SIDENAV_BTN_PX,
+  minWidth: SIDENAV_BTN_PX,
+  minHeight: SIDENAV_BTN_PX,
+  borderRadius: 10,
   border: 'none',
   background: 'transparent',
   cursor: 'pointer',
@@ -869,6 +882,8 @@ const toolBtnBase: CSSProperties = {
   justifyContent: 'center',
   padding: 0,
   color: '#374151',
+  flexShrink: 0,
+  touchAction: 'manipulation',
 }
 
 const zoomBarStyle: CSSProperties = {
@@ -921,7 +936,8 @@ const zoomPercentStyle: CSSProperties = {
 
 const swatchPanelStyle: CSSProperties = {
   position: 'fixed',
-  left: 72,
+  /* 16 (dock left) + 10 pad + btn + 10 pad + gap */
+  left: 16 + 10 + SIDENAV_BTN_PX + 10 + 8,
   top: '50%',
   transform: 'translateY(-50%)',
   zIndex: 1100,
@@ -943,72 +959,6 @@ const swatchBtn: CSSProperties = {
   border: '1px solid rgba(0,0,0,0.12)',
   cursor: 'pointer',
   padding: 0,
-}
-
-function IconNote() {
-  /* FigJam-style: stacked pale stickies + front note with straight-fold dog-ear */
-  return (
-    <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden>
-      <rect
-        x="6.75"
-        y="6.25"
-        width="9"
-        height="9"
-        rx="1.35"
-        fill="#E8D88A"
-      />
-      <rect
-        x="6"
-        y="5.65"
-        width="9"
-        height="9"
-        rx="1.35"
-        fill="#F3E08A"
-      />
-      <rect
-        x="5.25"
-        y="4.85"
-        width="9"
-        height="9"
-        rx="1.35"
-        fill="#FFF6C8"
-        stroke="#DEC56E"
-        strokeWidth="0.45"
-      />
-      <path fill="#E9C85C" d="M11.15 13.85h3.1v-3.1z" />
-    </svg>
-  )
-}
-
-function IconCard() {
-  return (
-    <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden>
-      <rect
-        x="3"
-        y="5"
-        width="14"
-        height="10"
-        rx="2"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.5"
-      />
-    </svg>
-  )
-}
-
-function IconTask() {
-  return (
-    <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden>
-      <path
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        d="M6 10l2.5 2.5L14 7M4 5h12M4 8h8"
-      />
-    </svg>
-  )
 }
 
 function IconFigjamBold() {
@@ -1089,34 +1039,6 @@ const figjamTextToolbarSelect: CSSProperties = {
   color: '#fafafa',
   cursor: 'pointer',
   maxHeight: 30,
-}
-
-function IconSelect() {
-  return (
-    <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden>
-      <path
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        d="M3 3l7 14 2-6 6-2L3 3z"
-      />
-    </svg>
-  )
-}
-
-/** FigJam-style text / paragraph tool (T mark) */
-function IconText() {
-  return (
-    <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden>
-      <path
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        d="M6 5h8M10 5v11"
-      />
-    </svg>
-  )
 }
 
 function IconZoomOut() {
@@ -2601,7 +2523,11 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
           }}
           onClick={() => setActiveTool('select')}
         >
-          <IconSelect />
+          <MousePointer2
+            size={SIDENAV_ICON_PX}
+            strokeWidth={1.75}
+            aria-hidden
+          />
         </button>
         <button
           type="button"
@@ -2621,7 +2547,7 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
           }}
           onClick={() => setActiveTool('text')}
         >
-          <IconText />
+          <Type size={SIDENAV_ICON_PX} strokeWidth={1.75} aria-hidden />
         </button>
         <button
           type="button"
@@ -2641,7 +2567,7 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
           }}
           onClick={() => setActiveTool('note')}
         >
-          <IconNote />
+          <StickyNote size={SIDENAV_ICON_PX} strokeWidth={1.75} aria-hidden />
         </button>
         <button
           type="button"
@@ -2661,7 +2587,7 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
           }}
           onClick={() => setActiveTool('card')}
         >
-          <IconCard />
+          <Square size={SIDENAV_ICON_PX} strokeWidth={1.75} aria-hidden />
         </button>
         <button
           type="button"
@@ -2681,7 +2607,7 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
           }}
           onClick={() => setActiveTool('task')}
         >
-          <IconTask />
+          <ListChecks size={SIDENAV_ICON_PX} strokeWidth={1.75} aria-hidden />
         </button>
       </div>
 

@@ -56,6 +56,12 @@ function App() {
           <Canvas initialState={boot.canvasState} />
         </div>
       )}
+      <footer className="folium-app-credit" aria-label="Version and copyright">
+        <p className="folium-app-credit__tagline">
+          Folium v0.1 · All data stays on your device
+        </p>
+        <p className="folium-app-credit__owner">© 2026 Marco Amodio</p>
+      </footer>
     </SaveStatusProvider>
   )
 }

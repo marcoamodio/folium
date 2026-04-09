@@ -2,7 +2,7 @@
 
 > Infinite space.
 
-An infinite canvas for notes, quick task lists, card sorting, free-form text, and pasted images. Opens instantly. No login. No friction.
+**v0.1.0** — An infinite canvas for notes, quick task lists, card sorting, free-form text, and pasted images. Opens instantly. No login. No friction. All data stays on your device.
 
 ## Features
 
@@ -19,16 +19,21 @@ An infinite canvas for notes, quick task lists, card sorting, free-form text, an
 - **Full restore** — Canvas state reloads after refresh.
 - **Encryption** — AES-256-GCM: the serialized canvas is encrypted in the browser before storage; a key is derived locally (no server).
 - **Zero backend** — Everything stays local in your browser.
-- **Minimal chrome** — Vertical tool rail, optional color swatches when placing notes/cards/tasks, save status in the top bar.
+- **Minimal chrome** — Left tool rail ([Lucide](https://lucide.dev/) icons, large tap targets), optional color swatches when placing notes/cards/tasks, save status in the top bar, and a slim footer with version and copyright.
 
 ## Tech stack
 
-- Vite + React + TypeScript
+- Vite + React 19 + TypeScript
 - **Konva** + react-konva (canvas)
+- **Lucide React** (toolbar icons)
 - Immer (immutable updates)
 - Dexie.js (IndexedDB)
 - Web Crypto API (AES-256-GCM)
 - Tailwind CSS
+
+## Requirements
+
+- **Node.js** **20.19+** or **22.12+** (required by Vite 8 for `npm run dev` / `npm run build`).
 
 ## Getting started
 
@@ -46,6 +51,10 @@ Other scripts: `npm run build` (typecheck + production bundle), `npm run preview
 - [ ] Export canvas (JSON / PNG)
 - [ ] Cloud sync (Phase 2)
 - [ ] Account + subscription (Phase 2)
+
+## Author
+
+Marco Amodio
 
 ## License
 

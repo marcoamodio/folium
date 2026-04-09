@@ -225,6 +225,45 @@ body,
   color: #737373;
 }
 
+/* Slim centered version / privacy + copyright (above board, below tool chrome) */
+.folium-app-credit {
+  position: fixed;
+  bottom: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1050;
+  margin: 0;
+  padding: 0 12px;
+  max-width: min(92vw, 520px);
+  text-align: center;
+  pointer-events: none;
+  font-family:
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    sans-serif;
+}
+
+.folium-app-credit__tagline,
+.folium-app-credit__owner {
+  margin: 0;
+  line-height: 1.35;
+  font-weight: 400;
+  color: rgba(55, 65, 81, 0.72);
+  letter-spacing: 0.01em;
+}
+
+.folium-app-credit__tagline {
+  font-size: 10px;
+}
+
+.folium-app-credit__owner {
+  margin-top: 2px;
+  font-size: 9px;
+  color: rgba(55, 65, 81, 0.55);
+}
+
 h1,
 h2 {
   font-family: var(--heading);
