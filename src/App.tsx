@@ -4,14 +4,16 @@ import { decrypt } from './crypto'
 import { getOrCreateKey } from './cryptoKey'
 import { loadCanvasRow } from './db'
 import { FoliumTopBar } from './FoliumTopBar'
+import { MobileCourtesy } from './MobileCourtesy'
 import { SaveStatusProvider } from './SaveStatusContext'
 import { DEFAULT_STATE, parseCanvasStateJson, type CanvasState } from './types'
+import { useIsPhoneViewport } from './useIsPhoneViewport'
 
 type BootState =
   | { status: 'loading' }
   | { status: 'ready'; canvasState: CanvasState }
 
-function App() {
+function AppDesktop() {
   const [boot, setBoot] = useState<BootState>({ status: 'loading' })
 
   useEffect(() => {
@@ -64,6 +66,12 @@ function App() {
       </footer>
     </SaveStatusProvider>
   )
+}
+
+function App() {
+  const isPhoneViewport = useIsPhoneViewport()
+  if (isPhoneViewport) return <MobileCourtesy />
+  return <AppDesktop />
 }
 
 export default App

@@ -142,6 +142,7 @@ export const ALLOWED_IMAGE_MIME_TYPES = [
 
 export interface CanvasState {
   elements: CanvasElement[]
+  connectors: Connector[]
   viewport: {
     x: number
     y: number
@@ -149,8 +150,22 @@ export interface CanvasState {
   }
 }
 
+export type Anchor = 'top' | 'right' | 'bottom' | 'left'
+
+export interface Connector {
+  id: string
+  fromId: string
+  toId: string
+  fromAnchor: Anchor
+  toAnchor: Anchor
+  label?: string
+  color: string
+  style: 'solid' | 'dashed'
+}
+
 export const DEFAULT_STATE: CanvasState = {
   elements: [],
+  connectors: [],
   viewport: { x: 0, y: 0, scale: 1 },
 }
 
@@ -290,7 +305,12 @@ function isCanvasElement(v: unknown): v is CanvasElement {
 export function isCanvasState(v: unknown): v is CanvasState {
   if (!v || typeof v !== 'object') return false
   const o = v as Record<string, unknown>
-  if (!Array.isArray(o.elements) || !o.viewport || typeof o.viewport !== 'object') {
+  if (
+    !Array.isArray(o.elements) ||
+    !Array.isArray(o.connectors) ||
+    !o.viewport ||
+    typeof o.viewport !== 'object'
+  ) {
     return false
   }
   const vp = o.viewport as Record<string, unknown>
@@ -301,7 +321,29 @@ export function isCanvasState(v: unknown): v is CanvasState {
   ) {
     return false
   }
-  return o.elements.every(isCanvasElement)
+  return o.elements.every(isCanvasElement) && o.connectors.every(isConnector)
+}
+
+function isAnchor(v: unknown): v is Anchor {
+  return v === 'top' || v === 'right' || v === 'bottom' || v === 'left'
+}
+
+function isConnector(v: unknown): v is Connector {
+  if (!v || typeof v !== 'object') return false
+  const o = v as Record<string, unknown>
+  if (
+    typeof o.id !== 'string' ||
+    typeof o.fromId !== 'string' ||
+    typeof o.toId !== 'string' ||
+    !isAnchor(o.fromAnchor) ||
+    !isAnchor(o.toAnchor) ||
+    typeof o.color !== 'string' ||
+    (o.style !== 'solid' && o.style !== 'dashed')
+  ) {
+    return false
+  }
+  if (o.label !== undefined && typeof o.label !== 'string') return false
+  return true
 }
 
 export function parseCanvasStateJson(json: string): CanvasState {

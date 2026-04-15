@@ -170,12 +170,13 @@ body,
   pointer-events: none;
 }
 
-.folium-top-bar__logo {
-  display: block;
-  height: 26px;
-  width: auto;
-  max-width: 100%;
-  object-fit: contain;
+.folium-top-bar__logo-text {
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  color: rgba(17, 24, 39, 0.9);
+  user-select: none;
+  white-space: nowrap;
 }
 
 .folium-top-bar__status {
@@ -205,6 +206,17 @@ body,
   border-radius: 50%;
   flex-shrink: 0;
   background: #737373;
+}
+
+.folium-top-bar__saved-emoji {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  font-size: 13px;
+  line-height: 1;
 }
 
 .folium-top-bar__status--saving .folium-top-bar__saved-dot {
@@ -262,6 +274,42 @@ body,
   margin-top: 2px;
   font-size: 9px;
   color: rgba(55, 65, 81, 0.55);
+}
+
+.folium-mobile {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background:
+    radial-gradient(800px 500px at 20% 10%, rgba(22, 163, 74, 0.10), transparent 60%),
+    radial-gradient(700px 500px at 80% 30%, rgba(234, 88, 12, 0.10), transparent 60%),
+    #0b0b0c;
+  color: #e5e5e5;
+}
+
+.folium-mobile__card {
+  width: min(520px, 100%);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 16px;
+  padding: 18px 16px;
+  background: rgba(10, 10, 11, 0.55);
+  backdrop-filter: blur(10px);
+}
+
+.folium-mobile__title {
+  margin: 0 0 10px 0;
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: #fafafa;
+}
+
+.folium-mobile__copy {
+  margin: 0 0 8px 0;
+  font-size: 13px;
+  line-height: 1.35;
+  color: rgba(229, 229, 229, 0.88);
 }
 
 h1,

@@ -16,9 +16,18 @@ import {
   useState,
 } from 'react'
 import { flushSync } from 'react-dom'
-import { Group, Image as KonvaImage, Layer, Rect, Stage, Text } from 'react-konva'
+import {
+  Arrow,
+  Group,
+  Image as KonvaImage,
+  Layer,
+  Rect,
+  Stage,
+  Text,
+} from 'react-konva'
 import { subscribeCanvasPersistence } from './canvasPersistence'
 import type {
+  Anchor,
   CanvasElement,
   CanvasState,
   ElementKind,
@@ -54,6 +63,7 @@ const MIN_ELEMENT_W = 80
 const MIN_ELEMENT_H = 40
 const MARQUEE_THRESHOLD = 5
 const HANDLE_SIZE = 8
+const CONNECTOR_SNAP_DIST = 16
 
 /** FigJam-style free text */
 const TEXT_LINE_HEIGHT = 1.357
@@ -66,6 +76,68 @@ const UI_SANS =
   'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
 
 const TEXT_SIZE_CHOICES = new Set<number>(TEXT_FONT_SIZES)
+
+type WorldPos = { x: number; y: number }
+
+function anchorWorldPos(
+  el: Pick<CanvasElement, 'x' | 'y' | 'width' | 'height'>,
+  anchor: Anchor,
+): WorldPos {
+  switch (anchor) {
+    case 'top':
+      return { x: el.x + el.width / 2, y: el.y }
+    case 'right':
+      return { x: el.x + el.width, y: el.y + el.height / 2 }
+    case 'bottom':
+      return { x: el.x + el.width / 2, y: el.y + el.height }
+    case 'left':
+      return { x: el.x, y: el.y + el.height / 2 }
+    default:
+      return { x: el.x, y: el.y }
+  }
+}
+
+function anchorDir(anchor: Anchor): WorldPos {
+  switch (anchor) {
+    case 'top':
+      return { x: 0, y: -1 }
+    case 'right':
+      return { x: 1, y: 0 }
+    case 'bottom':
+      return { x: 0, y: 1 }
+    case 'left':
+      return { x: -1, y: 0 }
+    default:
+      return { x: 0, y: 0 }
+  }
+}
+
+function bezierPoints(from: WorldPos, fromAnchor: Anchor, to: WorldPos, toAnchor: Anchor) {
+  const offset = 80
+  const d1 = anchorDir(fromAnchor)
+  const d2 = anchorDir(toAnchor)
+  const cp1 = { x: from.x + d1.x * offset, y: from.y + d1.y * offset }
+  const cp2 = { x: to.x + d2.x * offset, y: to.y + d2.y * offset }
+  return { cp1, cp2, points: [from.x, from.y, cp1.x, cp1.y, cp2.x, cp2.y, to.x, to.y] }
+}
+
+function cubicAt(p0: number, p1: number, p2: number, p3: number, t: number): number {
+  const mt = 1 - t
+  return (
+    mt * mt * mt * p0 +
+    3 * mt * mt * t * p1 +
+    3 * mt * t * t * p2 +
+    t * t * t * p3
+  )
+}
+
+function bezierMidpoint(from: WorldPos, cp1: WorldPos, cp2: WorldPos, to: WorldPos): WorldPos {
+  const t = 0.5
+  return {
+    x: cubicAt(from.x, cp1.x, cp2.x, to.x, t),
+    y: cubicAt(from.y, cp1.y, cp2.y, to.y, t),
+  }
+}
 
 function coerceToolbarFontSize(px: number): number {
   const c = Math.min(96, Math.max(8, Math.round(px)))
@@ -244,7 +316,7 @@ function measureTextBlockHeight(
   return Math.max(MIN_ELEMENT_H, Math.ceil(innerH + TEXT_PAD_Y * 2))
 }
 
-type ActiveTool = 'select' | 'note' | 'task' | 'card' | 'text'
+type ActiveTool = 'select' | 'note' | 'task' | 'card' | 'text' | 'connect'
 type HandleId = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w'
 
 function clamp(n: number, min: number, max: number): number {
@@ -313,6 +385,20 @@ function screenRectFromStage(
     top: cont.top + el.y * s + py,
     width: el.width * s,
     height: el.height * s,
+  }
+}
+
+function screenPointFromStage(
+  stage: Konva.Stage,
+  world: WorldPos,
+  viewport: CanvasState['viewport'],
+): { left: number; top: number } {
+  const cont = stage.container().getBoundingClientRect()
+  const s = viewport.scale
+  const { x: px, y: py } = viewport
+  return {
+    left: cont.left + world.x * s + px,
+    top: cont.top + world.y * s + py,
   }
 }
 
@@ -1069,6 +1155,21 @@ function IconZoomIn() {
   )
 }
 
+function IconConnect() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 20 20" fill="none" aria-hidden>
+      <path
+        d="M6 10h8"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+      />
+      <circle cx="5.5" cy="10" r="2.25" stroke="currentColor" strokeWidth="1.7" />
+      <circle cx="14.5" cy="10" r="2.25" stroke="currentColor" strokeWidth="1.7" />
+    </svg>
+  )
+}
+
 export function Canvas({ initialState }: { initialState: CanvasState }) {
   const { state, commit, undo, redo } = useCanvasHistory(initialState)
   const stateRef = useRef(state)
@@ -1078,7 +1179,17 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
   const [size, setSize] = useState({ w: 800, h: 600 })
 
   const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const [selectedConnectorId, setSelectedConnectorId] = useState<string | null>(
+    null,
+  )
   const [activeTool, setActiveTool] = useState<ActiveTool>('select')
+  const [connectorDraft, setConnectorDraft] = useState<{
+    fromId: string
+    fromAnchor: Anchor
+    toWorldPos: WorldPos
+    snappedTo: { toId: string; toAnchor: Anchor } | null
+  } | null>(null)
+  const connectorDraftRef = useRef<typeof connectorDraft>(null)
   const [marquee, setMarquee] = useState<{
     x: number
     y: number
@@ -1105,6 +1216,8 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
   )
   const [hoverHandle, setHoverHandle] = useState<HandleId | null>(null)
   const [hoverElement, setHoverElement] = useState(false)
+  const [hoveredElementId, setHoveredElementId] = useState<string | null>(null)
+  const [hoveredAnchorKey, setHoveredAnchorKey] = useState<string | null>(null)
 
   const effectiveSelectedIds = useMemo(() => {
     const set = new Set(state.elements.map((e) => e.id))
@@ -1131,6 +1244,10 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
   useLayoutEffect(() => {
     stateRef.current = state
   }, [state])
+
+  useLayoutEffect(() => {
+    connectorDraftRef.current = connectorDraft
+  }, [connectorDraft])
 
   useLayoutEffect(() => {
     return subscribeCanvasPersistence({
@@ -1387,7 +1504,16 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
         else undo()
       }
       if (e.key === 'Escape') {
-        setActiveTool('select')
+        if (connectorDraftRef.current) {
+          setConnectorDraft(null)
+          return
+        }
+        if (activeTool === 'connect') {
+          setActiveTool('select')
+        } else {
+          setActiveTool('select')
+        }
+        setSelectedConnectorId(null)
         clearMarqueeSession()
       }
     }
@@ -1409,16 +1535,26 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
       window.removeEventListener('keyup', up)
       window.removeEventListener('blur', onWinBlur)
     }
-  }, [undo, redo, clearMarqueeSession])
+  }, [activeTool, undo, redo, clearMarqueeSession])
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      const ids = effectiveSelectedIdsRef.current
-      if (ids.length === 0) return
       const active = document.activeElement?.tagName
       if (active === 'INPUT' || active === 'TEXTAREA') return
       if (e.key !== 'Backspace' && e.key !== 'Delete') return
       e.preventDefault()
+
+      const selectedConn = selectedConnectorId
+      if (selectedConn) {
+        setSelectedConnectorId(null)
+        commit((d) => {
+          d.connectors = d.connectors.filter((c) => c.id !== selectedConn)
+        })
+        return
+      }
+
+      const ids = effectiveSelectedIdsRef.current
+      if (ids.length === 0) return
       const remove = new Set(ids)
       setSelectedIds([])
       commit((d) => {
@@ -1427,7 +1563,7 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [commit])
+  }, [commit, selectedConnectorId])
 
   const zoomFromCenter = useCallback(
     (factor: number) => {
@@ -1514,7 +1650,8 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
     if (!stage || !targetIsBoardBackground(e.target, stage)) return
     if (e.evt.button !== 0) return
     if (spaceDown.current) return
-    if (activeTool !== 'select') {
+    setSelectedConnectorId(null)
+    if (activeTool !== 'select' && activeTool !== 'connect') {
       const w = worldFromPointer(stage, viewportMemo)
       if (!w) return
       const tool = activeTool
@@ -1737,6 +1874,99 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
     [resizePreview],
   )
 
+  const elementById = useMemo(() => {
+    const m = new Map<string, CanvasElement>()
+    for (const el of state.elements) {
+      m.set(el.id, displayElement(el))
+    }
+    return m
+  }, [state.elements, displayElement])
+  const elementByIdRef = useRef(elementById)
+  useLayoutEffect(() => {
+    elementByIdRef.current = elementById
+  }, [elementById])
+
+  const findSnapTarget = useCallback(
+    (
+      pos: WorldPos,
+      fromId: string,
+    ): { toId: string; toAnchor: Anchor; toWorldPos: WorldPos } | null => {
+      let best: { toId: string; toAnchor: Anchor; toWorldPos: WorldPos; d: number } | null =
+        null
+      const anchors: Anchor[] = ['top', 'right', 'bottom', 'left']
+      for (const [id, el] of elementByIdRef.current.entries()) {
+        if (id === fromId) continue
+        for (const a of anchors) {
+          const ap = anchorWorldPos(el, a)
+          const d = Math.hypot(ap.x - pos.x, ap.y - pos.y)
+          if (d > CONNECTOR_SNAP_DIST) continue
+          if (!best || d < best.d) {
+            best = { toId: id, toAnchor: a, toWorldPos: ap, d }
+          }
+        }
+      }
+      if (!best) return null
+      return { toId: best.toId, toAnchor: best.toAnchor, toWorldPos: best.toWorldPos }
+    },
+    [],
+  )
+
+  useEffect(() => {
+    if (!connectorDraft) return
+    const clientToWorld = (clientX: number, clientY: number) => {
+      const stage = stageRef.current
+      if (!stage) return null
+      const { x: vxx, y: vyy, scale } = viewportUiRef.current
+      const rect = stage.container().getBoundingClientRect()
+      const px = clientX - rect.left
+      const py = clientY - rect.top
+      return { wx: (px - vxx) / scale, wy: (py - vyy) / scale }
+    }
+    const onMove = (e: MouseEvent) => {
+      const cur = connectorDraftRef.current
+      if (!cur) return
+      const p = clientToWorld(e.clientX, e.clientY)
+      if (!p) return
+      const snap = findSnapTarget({ x: p.wx, y: p.wy }, cur.fromId)
+      setConnectorDraft({
+        ...cur,
+        toWorldPos: snap ? snap.toWorldPos : { x: p.wx, y: p.wy },
+        snappedTo: snap ? { toId: snap.toId, toAnchor: snap.toAnchor } : null,
+      })
+    }
+    const onUp = (e: MouseEvent) => {
+      const cur = connectorDraftRef.current
+      if (!cur) return
+      const p = clientToWorld(e.clientX, e.clientY)
+      const snap = p ? findSnapTarget({ x: p.wx, y: p.wy }, cur.fromId) : null
+      if (snap) {
+        const nextId = crypto.randomUUID()
+        const fromId = cur.fromId
+        const fromAnchor = cur.fromAnchor
+        commit((d) => {
+          d.connectors.push({
+            id: nextId,
+            fromId,
+            toId: snap.toId,
+            fromAnchor,
+            toAnchor: snap.toAnchor,
+            color: '#6b7280',
+            style: 'solid',
+          })
+        })
+        setSelectedConnectorId(nextId)
+      }
+      setConnectorDraft(null)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    window.addEventListener('blur', () => setConnectorDraft(null), { once: true })
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+  }, [commit, connectorDraft, findSnapTarget])
+
   const onResizeStart = (handle: HandleId) => {
     if (!singleSelectedEl) return
     resizeSession.current = { orig: { ...singleSelectedEl }, handle }
@@ -1907,6 +2137,10 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
       container.style.cursor = 'default'
       return
     }
+    if (connectorDraft !== null) {
+      container.style.cursor = 'crosshair'
+      return
+    }
     if (marquee !== null) {
       container.style.cursor = 'crosshair'
       return
@@ -1934,6 +2168,7 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
     container.style.cursor = 'default'
   }, [
     activeTool,
+    connectorDraft,
     draggingElementId,
     editing,
     hoverElement,
@@ -1953,10 +2188,12 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
     const p = worldFromPointer(stage, viewportMemo)
     if (!p) {
       setHoverElement(false)
+      setHoveredElementId(null)
       updateCursor()
       return
     }
     let overEl = false
+    let overId: string | null = null
     for (const el of state.elements) {
       const d = displayElement(el)
       if (
@@ -1966,10 +2203,12 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
         p.wy <= d.y + d.height
       ) {
         overEl = true
+        overId = el.id
         break
       }
     }
     setHoverElement(overEl)
+    setHoveredElementId(overId)
     updateCursor()
   }
 
@@ -2021,6 +2260,89 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
             listening
             onClick={onBgClick}
           />
+          {state.connectors.map((c) => {
+            const fromEl = elementById.get(c.fromId)
+            const toEl = elementById.get(c.toId)
+            if (!fromEl || !toEl) return null
+            const from = anchorWorldPos(fromEl, c.fromAnchor)
+            const to = anchorWorldPos(toEl, c.toAnchor)
+            const { cp1, cp2, points } = bezierPoints(from, c.fromAnchor, to, c.toAnchor)
+            const dash = c.style === 'dashed' ? [8, 4] : []
+            const selected = selectedConnectorId === c.id
+            const stroke = selected ? '#3b82f6' : c.color
+            const strokeWidth = selected ? 3 : 2
+            const mid = c.label ? bezierMidpoint(from, cp1, cp2, to) : null
+
+            return (
+              <Group key={c.id}>
+                <Arrow
+                  points={points}
+                  stroke={stroke}
+                  strokeWidth={strokeWidth}
+                  dash={dash}
+                  lineCap="round"
+                  lineJoin="round"
+                  pointerLength={10}
+                  pointerWidth={8}
+                  pointerAtEnding
+                  pointerAtBeginning={false}
+                  bezier
+                  hitStrokeWidth={12}
+                  onClick={(e) => {
+                    e.cancelBubble = true
+                    setSelectedIds([])
+                    setSelectedConnectorId(c.id)
+                  }}
+                />
+                {mid && c.label ? (
+                  <Group x={mid.x} y={mid.y} listening={false}>
+                    <Rect
+                      x={-((c.label.length * 6.2 + 8) / 2)}
+                      y={-9}
+                      width={c.label.length * 6.2 + 8}
+                      height={18}
+                      fill="#ffffff"
+                      cornerRadius={4}
+                      opacity={0.95}
+                    />
+                    <Text
+                      x={-((c.label.length * 6.2) / 2)}
+                      y={-7}
+                      text={c.label}
+                      fontSize={11}
+                      fontFamily={UI_SANS}
+                      fill="#374151"
+                    />
+                  </Group>
+                ) : null}
+              </Group>
+            )
+          })}
+          {connectorDraft ? (() => {
+            const fromEl = elementById.get(connectorDraft.fromId)
+            if (!fromEl) return null
+            const from = anchorWorldPos(fromEl, connectorDraft.fromAnchor)
+            const to = connectorDraft.toWorldPos
+            const toAnchor = connectorDraft.snappedTo?.toAnchor ?? 'left'
+            const { points } = bezierPoints(from, connectorDraft.fromAnchor, to, toAnchor)
+            return (
+              <Arrow
+                points={points}
+                stroke="#3b82f6"
+                strokeWidth={1.5}
+                dash={[6, 6]}
+                opacity={0.7}
+                lineCap="round"
+                lineJoin="round"
+                pointerLength={10}
+                pointerWidth={8}
+                pointerAtEnding
+                pointerAtBeginning={false}
+                bezier
+                listening={false}
+              />
+            )
+          })() : null}
           {normMarquee ? (
             <Rect
               x={normMarquee.x}
@@ -2034,6 +2356,8 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
               listening={false}
             />
           ) : null}
+        </Layer>
+        <Layer>
           {state.elements.map((el) => (
             <CanvasElementNode
               key={el.id}
@@ -2042,7 +2366,10 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
               selected={effectiveSelectedIds.includes(el.id)}
               editing={editing?.id === el.id}
               handMode={handMode}
-              onSelect={(id) => setSelectedIds([id])}
+              onSelect={(id) => {
+                setSelectedConnectorId(null)
+                setSelectedIds([id])
+              }}
               onDragStart={(id) => {
                 setDraggingElementId(id)
                 updateCursor()
@@ -2066,6 +2393,81 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
           </Layer>
         ) : null}
       </Stage>
+
+      {(() => {
+        const stage = stageRef.current
+        if (!stage) return null
+        const canShow =
+          editing === null &&
+          activeTool !== 'note' &&
+          activeTool !== 'card' &&
+          activeTool !== 'task' &&
+          activeTool !== 'text' &&
+          draggingElementId === null
+
+        if (!canShow) return null
+
+        const showingAll = activeTool === 'connect'
+        const targetId = showingAll ? null : hoveredElementId
+        if (!showingAll && !targetId) return null
+        if (!showingAll && effectiveSelectedIds.includes(targetId)) return null
+
+        const ids = showingAll
+          ? state.elements.map((e) => e.id)
+          : [targetId]
+
+        const anchors: Anchor[] = ['top', 'right', 'bottom', 'left']
+        const s = viewportMemo
+        return ids.flatMap((id) => {
+          const el = elementById.get(id)
+          if (!el) return []
+          return anchors.map((a) => {
+            const key = `${id}:${a}`
+            const wpos = anchorWorldPos(el, a)
+            const p = screenPointFromStage(stage, wpos, s)
+            const hovered = hoveredAnchorKey === key
+            const snapped =
+              connectorDraft?.snappedTo?.toId === id &&
+              connectorDraft?.snappedTo?.toAnchor === a
+            return (
+              <div
+                key={key}
+                role="button"
+                aria-label={`Anchor ${a}`}
+                onMouseEnter={() => setHoveredAnchorKey(key)}
+                onMouseLeave={() => setHoveredAnchorKey((cur) => (cur === key ? null : cur))}
+                onMouseDown={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  setSelectedIds([])
+                  setSelectedConnectorId(null)
+                  setConnectorDraft({
+                    fromId: id,
+                    fromAnchor: a,
+                    toWorldPos: wpos,
+                    snappedTo: null,
+                  })
+                }}
+                style={{
+                  position: 'fixed',
+                  left: p.left - 6,
+                  top: p.top - 6,
+                  width: 12,
+                  height: 12,
+                  borderRadius: '50%',
+                  border: '2px solid #3b82f6',
+                  background: hovered ? '#3b82f6' : '#ffffff',
+                  boxSizing: 'border-box',
+                  cursor: 'crosshair',
+                  zIndex: 1200,
+                  pointerEvents: 'auto',
+                  boxShadow: snapped ? '0 0 0 3px rgba(59,130,246,0.25)' : undefined,
+                }}
+              />
+            )
+          })
+        })
+      })()}
 
       {editing?.kind === 'text' && editLayout ? (
         <div
@@ -2608,6 +3010,26 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
           onClick={() => setActiveTool('task')}
         >
           <ListChecks size={SIDENAV_ICON_PX} strokeWidth={1.75} aria-hidden />
+        </button>
+        <button
+          type="button"
+          title="Connect"
+          style={{
+            ...toolBtnBase,
+            background: activeTool === 'connect' ? '#eff6ff' : 'transparent',
+            color: activeTool === 'connect' ? '#3b82f6' : '#374151',
+          }}
+          onMouseEnter={(e) => {
+            if (activeTool !== 'connect')
+              e.currentTarget.style.background = '#f3f4f6'
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background =
+              activeTool === 'connect' ? '#eff6ff' : 'transparent'
+          }}
+          onClick={() => setActiveTool('connect')}
+        >
+          <IconConnect />
         </button>
       </div>
 

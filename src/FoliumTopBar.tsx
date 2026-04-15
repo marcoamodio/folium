@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react'
-import logoSrc from './assets/logo-placeholder-folium.svg'
 import { useSaveStatus } from './SaveStatusContext'
 import type { SaveStatus } from './saveStatus'
 
@@ -28,8 +27,16 @@ function SaveStatusIndicator({ status }: { status: ActiveStatus }) {
       aria-hidden={!visible}
       data-visible={visible ? 'true' : 'false'}
     >
-      <span className="folium-top-bar__saved-dot" />
-      <span className="folium-top-bar__saved-label">{STATUS_LABEL[status]}</span>
+      {status === 'saved' ? (
+        <span className="folium-top-bar__saved-emoji" aria-hidden="true">
+          🎉
+        </span>
+      ) : (
+        <span className="folium-top-bar__saved-dot" />
+      )}
+      <span className="folium-top-bar__saved-label">
+        {STATUS_LABEL[status]}
+      </span>
     </span>
   )
 }
@@ -44,14 +51,9 @@ export function FoliumTopBar() {
     <header className="folium-top-bar">
       <div className="folium-top-bar__inner">
         <div className="folium-top-bar__logo-wrap">
-          <img
-            src={logoSrc}
-            alt="Folium"
-            className="folium-top-bar__logo"
-            width={814}
-            height={271}
-            decoding="async"
-          />
+          <span className="folium-top-bar__logo-text" aria-label="Folium">
+            Folium
+          </span>
         </div>
         <div
           className={`folium-top-bar__status folium-top-bar__status--${status}`}
