@@ -94,11 +94,12 @@ body,
  * Main board surface (Konva parent): dotted pattern + pan/zoom via custom properties.
  */
 .folium-board-bg {
-  background-color: #f7f7f7;
+  /* FigJam-like: light neutral field + subtle screen-fixed dots */
+  background-color: #f5f5f5;
   background-image: radial-gradient(
     circle,
-    rgba(0, 0, 0, 0.12) 1.2px,
-    transparent 1.2px
+    rgba(0, 0, 0, 0.09) 1px,
+    transparent 1px
   );
   background-size: var(--folium-dot-step, 24px) var(--folium-dot-step, 24px);
   background-position: var(--folium-bg-x, 0px) var(--folium-bg-y, 0px);

@@ -1,4 +1,11 @@
-export type ElementKind = 'note' | 'task' | 'card' | 'text' | 'image' | 'pencil'
+export type ElementKind =
+  | 'note'
+  | 'task'
+  | 'card'
+  | 'text'
+  | 'image'
+  | 'pencil'
+  | 'folder'
 
 /** Konva Text.fontStyle values we persist for the text tool. */
 export type TextFontStyleKonva =
@@ -39,6 +46,8 @@ export interface CanvasElement {
   fontStyle?: TextFontStyleKonva
   /** `kind === 'text'`: horizontal alignment. */
   textAlign?: TextAlignKonva
+  /** When set, element is inside a folder (not drawn on the main board). */
+  parentFolderId?: string
 }
 
 /** Default text tool font size (px). */
@@ -246,6 +255,12 @@ export const ELEMENT_DEFAULTS: Record<
     text: '',
     color: TEXT_COLORS[7],
   },
+  folder: {
+    width: 120,
+    height: 104,
+    text: 'Untitled folder',
+    color: '#E8EEF9',
+  },
 }
 
 function isElementKind(v: unknown): v is ElementKind {
@@ -255,7 +270,8 @@ function isElementKind(v: unknown): v is ElementKind {
     v === 'card' ||
     v === 'text' ||
     v === 'image' ||
-    v === 'pencil'
+    v === 'pencil' ||
+    v === 'folder'
   )
 }
 
@@ -291,7 +307,13 @@ function isCanvasElement(v: unknown): v is CanvasElement {
   if (o.kind === 'image') {
     return typeof o.imageSrc === 'string' && o.imageSrc.length > 0
   }
+  if (o.kind === 'folder') {
+    if (o.imageSrc !== undefined) return false
+  }
   if (o.imageSrc !== undefined && typeof o.imageSrc !== 'string') return false
+  if (o.parentFolderId !== undefined && typeof o.parentFolderId !== 'string') {
+    return false
+  }
   if (o.fontSize !== undefined) {
     if (typeof o.fontSize !== 'number' || !Number.isFinite(o.fontSize)) {
       return false

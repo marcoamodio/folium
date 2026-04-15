@@ -1,11 +1,13 @@
 import Konva from 'konva'
 import {
+  CircleHelp,
   ListChecks,
   MousePointer2,
   Pencil,
   Square,
   StickyNote,
   Type,
+  X,
 } from 'lucide-react'
 import type { CSSProperties, ChangeEvent, DragEvent as ReactDragEvent } from 'react'
 import {
@@ -16,7 +18,7 @@ import {
   useRef,
   useState,
 } from 'react'
-import { flushSync } from 'react-dom'
+import { createPortal, flushSync } from 'react-dom'
 import {
   Arrow,
   Group,
@@ -27,6 +29,7 @@ import {
   Stage,
   Text,
 } from 'react-konva'
+import { APP_DISPLAY_NAME, APP_VERSION } from './appMeta'
 import { subscribeCanvasPersistence } from './canvasPersistence'
 import type {
   Anchor,
@@ -59,7 +62,8 @@ import { useCanvasHistory } from './useCanvasHistory'
 const SCALE_MIN = 0.1
 const SCALE_MAX = 4
 const ZOOM_STEP = 1.08
-const WORLD_DOT_STEP = 24
+/** Screen-space dot grid step (px). Fixed like FigJam so zoom doesn’t change dot density. */
+const SCREEN_DOT_GRID_STEP_PX = 24
 const NOTE_HEADER = 32
 const MIN_ELEMENT_W = 80
 const MIN_ELEMENT_H = 40
@@ -329,6 +333,9 @@ function createElement(kind: ElementKind, cx: number, cy: number): CanvasElement
   if (kind === 'image') {
     throw new Error('createElement: images are added via drag-and-drop')
   }
+  if (kind === 'folder') {
+    throw new Error('createElement: folders are created by merging images')
+  }
   const d = ELEMENT_DEFAULTS[kind]
   if (kind === 'text') {
     const fs = TEXT_FONT_SIZE_DEFAULT
@@ -390,6 +397,39 @@ function screenRectFromStage(
   }
 }
 
+const FOLDER_TITLE_PAD = 8
+/** World-space rect for the folder label strip (matches Konva Text placement). */
+function folderTitleWorldRect(el: CanvasElement): {
+  x: number
+  y: number
+  w: number
+  h: number
+} {
+  return {
+    x: el.x + FOLDER_TITLE_PAD,
+    y: el.y + el.height - 24,
+    w: Math.max(24, el.width - FOLDER_TITLE_PAD * 2),
+    h: 24,
+  }
+}
+
+function folderTitleScreenRect(
+  stage: Konva.Stage,
+  el: CanvasElement,
+  viewport: CanvasState['viewport'],
+): { left: number; top: number; width: number; height: number } {
+  const cont = stage.container().getBoundingClientRect()
+  const s = viewport.scale
+  const { x: px, y: py } = viewport
+  const r = folderTitleWorldRect(el)
+  return {
+    left: cont.left + r.x * s + px,
+    top: cont.top + r.y * s + py,
+    width: r.w * s,
+    height: Math.max(26, r.h * s),
+  }
+}
+
 function screenPointFromStage(
   stage: Konva.Stage,
   world: WorldPos,
@@ -415,6 +455,135 @@ function rectsIntersect(
   bh: number,
 ): boolean {
   return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by
+}
+
+function rectIntersectionArea(
+  ax: number,
+  ay: number,
+  aw: number,
+  ah: number,
+  bx: number,
+  by: number,
+  bw: number,
+  bh: number,
+): number {
+  const x0 = Math.max(ax, bx)
+  const y0 = Math.max(ay, by)
+  const x1 = Math.min(ax + aw, bx + bw)
+  const y1 = Math.min(ay + ah, by + bh)
+  if (x0 >= x1 || y0 >= y1) return 0
+  return (x1 - x0) * (y1 - y0)
+}
+
+/** True when one image is dropped “onto” another (overlap / center-in-rect). */
+function folderMergeHit(a: CanvasElement, b: CanvasElement): boolean {
+  if (
+    !rectsIntersect(
+      a.x,
+      a.y,
+      a.width,
+      a.height,
+      b.x,
+      b.y,
+      b.width,
+      b.height,
+    )
+  ) {
+    return false
+  }
+  const ia = a.width * a.height
+  const ib = b.width * b.height
+  const inter = rectIntersectionArea(
+    a.x,
+    a.y,
+    a.width,
+    a.height,
+    b.x,
+    b.y,
+    b.width,
+    b.height,
+  )
+  const minA = Math.min(ia, ib)
+  const ratio = minA > 0 ? inter / minA : 0
+  const cx = a.x + a.width / 2
+  const cy = a.y + a.height / 2
+  const centerInB =
+    cx >= b.x &&
+    cx <= b.x + b.width &&
+    cy >= b.y &&
+    cy <= b.y + b.height
+  return ratio >= 0.16 || centerInB
+}
+
+/** Include contained images when dragging a folder so they stay aligned in world space. */
+function expandDragIdsWithFolderContents(
+  ids: string[],
+  elements: CanvasElement[],
+): string[] {
+  const out = new Set(ids)
+  for (const el of elements) {
+    if (el.kind !== 'folder' || !out.has(el.id)) continue
+    for (const c of elements) {
+      if (c.parentFolderId === el.id) out.add(c.id)
+    }
+  }
+  return [...out]
+}
+
+const MAC_FOLDER_SVG_MARKUP = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 88 72" fill="none">
+<path fill="url(#foliumFGrad)" d="M10 26c0-5 4-9 9-9h17.5l5.5-7H62c5 0 9 4 9 9v34c0 5-4 9-9 9H19c-5 0-9-4-9-9V26Z"/>
+<path fill="#fff" fill-opacity=".28" d="M10 26h68v1.5H10V26Z"/>
+<defs><linearGradient id="foliumFGrad" x1="44" y1="10" x2="44" y2="62" gradientUnits="userSpaceOnUse">
+<stop stop-color="#7EB6FF"/><stop offset="1" stop-color="#2F6EEB"/>
+</linearGradient></defs>
+</svg>`
+
+let macFolderImgCache: HTMLImageElement | null = null
+let macFolderImgLoading = false
+const macFolderImgWait: Array<() => void> = []
+
+function ensureMacFolderImage(onReady: (img: HTMLImageElement) => void) {
+  if (macFolderImgCache) {
+    onReady(macFolderImgCache)
+    return
+  }
+  macFolderImgWait.push(() => {
+    if (macFolderImgCache) onReady(macFolderImgCache)
+  })
+  if (macFolderImgLoading) return
+  macFolderImgLoading = true
+  const img = new window.Image()
+  img.onload = () => {
+    macFolderImgCache = img
+    macFolderImgLoading = false
+    macFolderImgWait.splice(0).forEach((fn) => fn())
+  }
+  img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(MAC_FOLDER_SVG_MARKUP)}`
+}
+
+function MacFolderGlyph({
+  width,
+  height,
+}: {
+  width: number
+  height: number
+}) {
+  const [img, setImg] = useState<HTMLImageElement | null>(macFolderImgCache)
+  useEffect(() => {
+    ensureMacFolderImage(setImg)
+  }, [])
+  if (!img) {
+    return (
+      <Rect
+        width={width}
+        height={height}
+        fill="#4F8FFF"
+        cornerRadius={10}
+        listening={false}
+      />
+    )
+  }
+  return <KonvaImage image={img} width={width} height={height} listening={false} />
 }
 
 function normalizeMarquee(
@@ -538,6 +707,7 @@ type CanvasElementNodeProps = {
   onDragMove: (id: string, x: number, y: number) => void
   onDragEnd: (id: string, x: number, y: number) => void
   onEditRequest: (el: CanvasElement) => void
+  onFolderOpen: (el: CanvasElement) => void
 }
 
 function CanvasElementNode({
@@ -551,6 +721,7 @@ function CanvasElementNode({
   onDragMove,
   onDragEnd,
   onEditRequest,
+  onFolderOpen,
 }: CanvasElementNodeProps) {
   const canInteract = !handMode
   const stopBubbleForItemDrag = (
@@ -812,6 +983,98 @@ function CanvasElementNode({
     )
   }
 
+  if (display.kind === 'folder') {
+    const pad = FOLDER_TITLE_PAD
+    const iconW = Math.max(24, display.width - pad * 2)
+    const iconH = Math.min(
+      Math.max(40, display.height - 30),
+      iconW * 0.75,
+    )
+    return (
+      <Group
+        x={display.x}
+        y={display.y}
+        listening={canInteract}
+        draggable={canInteract}
+        onMouseDown={stopBubbleForItemDrag}
+        onClick={(e: Konva.KonvaEventObject<MouseEvent>) => {
+          if (e.evt.button !== 0) return
+          e.cancelBubble = true
+          onSelect(el.id, e.evt)
+        }}
+        onDragStart={() => onDragStart(el.id)}
+        onDragMove={(e: Konva.KonvaEventObject<DragEvent>) => {
+          onDragMove(el.id, e.target.x(), e.target.y())
+        }}
+        onDragEnd={(e: Konva.KonvaEventObject<DragEvent>) => {
+          onDragEnd(el.id, e.target.x(), e.target.y())
+        }}
+      >
+        <Rect
+          width={display.width}
+          height={display.height}
+          cornerRadius={12}
+          fill="rgba(255,255,255,0.97)"
+          stroke={selected ? '#3b82f6' : '#e5e7eb'}
+          strokeWidth={selected ? 2 : 1}
+          shadowColor="#00000018"
+          shadowBlur={8}
+          shadowOffsetY={2}
+          shadowEnabled
+        />
+        <Group x={(display.width - iconW) / 2} y={pad + 2}>
+          <MacFolderGlyph width={iconW} height={iconH} />
+          <Rect
+            width={iconW}
+            height={iconH}
+            fill="rgba(0,0,0,0.001)"
+            onDblClick={(e: Konva.KonvaEventObject<MouseEvent>) => {
+              e.cancelBubble = true
+              onFolderOpen(el)
+            }}
+          />
+        </Group>
+        <Rect
+          x={pad}
+          y={display.height - 24}
+          width={display.width - pad * 2}
+          height={24}
+          fill="rgba(0,0,0,0.004)"
+          cornerRadius={4}
+          stroke={editing ? 'rgba(59,130,246,0.85)' : 'transparent'}
+          strokeWidth={1}
+          listening={canInteract}
+          cursor="text"
+          onMouseDown={(e: Konva.KonvaEventObject<MouseEvent>) => {
+            e.cancelBubble = true
+          }}
+          onClick={(e: Konva.KonvaEventObject<MouseEvent>) => {
+            if (e.evt.button !== 0) return
+            e.cancelBubble = true
+            if (!selected) {
+              onSelect(el.id, e.evt)
+            }
+            onEditRequest(el)
+          }}
+        />
+        {!editing ? (
+          <Text
+            x={pad}
+            y={display.height - 22}
+            width={display.width - pad * 2}
+            text={display.text}
+            fontSize={11}
+            fontFamily={UI_SANS}
+            fill="#374151"
+            ellipsis
+            wrap="none"
+            listening={false}
+          />
+        ) : null}
+      </Group>
+    )
+  }
+
   if (display.kind === 'pencil') {
     const pts = display.points ?? []
     const sw = display.strokeWidth ?? 4
@@ -1037,12 +1300,31 @@ const toolBtnBase: CSSProperties = {
   touchAction: 'manipulation',
 }
 
-const zoomBarStyle: CSSProperties = {
+/** Bottom-right cluster: detached info CTA + zoom (FigJam-style gap). */
+const canvasBottomRightClusterStyle: CSSProperties = {
   position: 'fixed',
   right: 16,
-  left: 'auto',
   bottom: 20,
   zIndex: 1100,
+  display: 'flex',
+  alignItems: 'center',
+  gap: 10,
+  pointerEvents: 'none',
+}
+
+const infoCtaBarStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  padding: '4px 6px',
+  background: '#ffffff',
+  borderRadius: 8,
+  border: '1px solid #e5e7eb',
+  boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
+  pointerEvents: 'auto',
+  overflow: 'hidden',
+}
+
+const zoomBarStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   gap: 2,
@@ -1315,6 +1597,144 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
   const spaceDown = useRef(false)
   const [handMode, setHandMode] = useState(false)
 
+  const [folderNaming, setFolderNaming] = useState<{
+    draggedId: string
+    targetId: string
+  } | null>(null)
+  const [folderNameDraft, setFolderNameDraft] = useState('Untitled folder')
+  const folderNamingRef = useRef(false)
+  useLayoutEffect(() => {
+    folderNamingRef.current = folderNaming != null
+  }, [folderNaming])
+
+  const [folderViewerId, setFolderViewerId] = useState<string | null>(null)
+  const [folderViewerEntered, setFolderViewerEntered] = useState(false)
+  const folderViewerIdRef = useRef<string | null>(null)
+  useLayoutEffect(() => {
+    folderViewerIdRef.current = folderViewerId
+  }, [folderViewerId])
+
+  useEffect(() => {
+    if (!folderViewerId) return
+    setFolderViewerEntered(false)
+    const id = requestAnimationFrame(() => {
+      requestAnimationFrame(() => setFolderViewerEntered(true))
+    })
+    return () => cancelAnimationFrame(id)
+  }, [folderViewerId])
+
+  const closeFolderViewer = useCallback(() => {
+    setFolderViewerEntered(false)
+    window.setTimeout(() => setFolderViewerId(null), 380)
+  }, [])
+
+  const openFolderViewer = useCallback((el: CanvasElement) => {
+    if (el.kind !== 'folder') return
+    setFolderViewerId(el.id)
+  }, [])
+
+  const tryQueueFolderMerge = useCallback(
+    (draggedId: string, sess: { ids: string[] } | null) => {
+      if (sess && sess.ids.length > 1) return
+      const dragged = stateRef.current.elements.find((e) => e.id === draggedId)
+      if (!dragged || dragged.kind !== 'image' || dragged.parentFolderId) return
+      let bestOther: { id: string; area: number } | null = null
+      for (const other of stateRef.current.elements) {
+        if (other.id === draggedId) continue
+        if (other.kind !== 'image' || other.parentFolderId) continue
+        if (!folderMergeHit(dragged, other)) continue
+        const area = rectIntersectionArea(
+          dragged.x,
+          dragged.y,
+          dragged.width,
+          dragged.height,
+          other.x,
+          other.y,
+          other.width,
+          other.height,
+        )
+        if (!bestOther || area > bestOther.area) {
+          bestOther = { id: other.id, area }
+        }
+      }
+      if (bestOther) {
+        setFolderNameDraft(ELEMENT_DEFAULTS.folder.text)
+        setFolderNaming({ draggedId, targetId: bestOther.id })
+      }
+    },
+    [],
+  )
+
+  const confirmFolderNaming = useCallback(() => {
+    const pending = folderNaming
+    if (!pending) return
+    const name = folderNameDraft.trim() || ELEMENT_DEFAULTS.folder.text
+    const { draggedId, targetId } = pending
+    const folderId = crypto.randomUUID()
+    const def = ELEMENT_DEFAULTS.folder
+    commit((d) => {
+      const a = d.elements.find((z) => z.id === draggedId)
+      const b = d.elements.find((z) => z.id === targetId)
+      if (!a || !b || a.kind !== 'image' || b.kind !== 'image') return
+      if (a.parentFolderId || b.parentFolderId) return
+      d.connectors = d.connectors.filter(
+        (c) =>
+          c.fromId !== a.id &&
+          c.toId !== a.id &&
+          c.fromId !== b.id &&
+          c.toId !== b.id,
+      )
+      const minX = Math.min(a.x, b.x)
+      const minY = Math.min(a.y, b.y)
+      const maxX = Math.max(a.x + a.width, b.x + b.width)
+      const maxY = Math.max(a.y + a.height, b.y + b.height)
+      const cx = (minX + maxX) / 2
+      const cy = (minY + maxY) / 2
+      d.elements.push({
+        id: folderId,
+        kind: 'folder',
+        x: cx - def.width / 2,
+        y: cy - def.height / 2,
+        width: def.width,
+        height: def.height,
+        text: name,
+        color: def.color,
+      })
+      a.parentFolderId = folderId
+      b.parentFolderId = folderId
+    })
+    setFolderNaming(null)
+    setActiveTool('select')
+    setSelectedIds([folderId])
+  }, [folderNaming, folderNameDraft, commit])
+
+  const rootElements = useMemo(
+    () => state.elements.filter((e) => !e.parentFolderId),
+    [state.elements],
+  )
+
+  const folderViewerFolder = useMemo(() => {
+    if (!folderViewerId) return null
+    return state.elements.find((e) => e.id === folderViewerId) ?? null
+  }, [folderViewerId, state.elements])
+
+  const folderViewerChildren = useMemo(() => {
+    if (!folderViewerId) return []
+    return state.elements.filter(
+      (e) => e.parentFolderId === folderViewerId && e.kind === 'image',
+    )
+  }, [folderViewerId, state.elements])
+
+  const folderNameInputRef = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    if (!folderNaming) return
+    const id = requestAnimationFrame(() => {
+      folderNameInputRef.current?.focus()
+      folderNameInputRef.current?.select()
+    })
+    return () => cancelAnimationFrame(id)
+  }, [folderNaming])
+
   const listenersRef = useRef(new Set<() => void>())
   const emit = useCallback(() => {
     listenersRef.current.forEach((fn) => fn())
@@ -1423,6 +1843,7 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
       commit((st) => {
         st.elements.push(d)
       })
+      setActiveTool('select')
       setSelectedIds([d.id])
     }
     window.addEventListener('mouseup', onUp)
@@ -1504,6 +1925,7 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
       const rp = resizePreviewRef.current
       const hit = stateRef.current.elements
         .filter((el) => {
+          if (el.parentFolderId) return false
           const d = rp?.id === el.id ? rp : el
           return rectsIntersect(
             norm.x,
@@ -1672,6 +2094,15 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
     const down = (e: KeyboardEvent) => {
       if (e.code === 'Space') {
         if (isSpaceReservedForTyping(e.target)) return
+        const sel = effectiveSelectedIdsRef.current
+        if (sel.length === 1) {
+          const hit = stateRef.current.elements.find((x) => x.id === sel[0])
+          if (hit?.kind === 'folder') {
+            e.preventDefault()
+            openFolderViewer(hit)
+            return
+          }
+        }
         e.preventDefault()
         spaceDown.current = true
         setHoverHandle(null)
@@ -1685,6 +2116,18 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
         else undo()
       }
       if (e.key === 'Escape') {
+        if (folderViewerIdRef.current) {
+          closeFolderViewer()
+          return
+        }
+        if (folderNamingRef.current) {
+          setFolderNaming(null)
+          return
+        }
+        if (infoModalOpenRef.current) {
+          setInfoModalOpen(false)
+          return
+        }
         if (connectorDraftRef.current) {
           setConnectorDraft(null)
           return
@@ -1716,7 +2159,7 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
       window.removeEventListener('keyup', up)
       window.removeEventListener('blur', onWinBlur)
     }
-  }, [activeTool, undo, redo, clearMarqueeSession])
+  }, [activeTool, undo, redo, clearMarqueeSession, closeFolderViewer, openFolderViewer])
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -1739,6 +2182,14 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
       const remove = new Set(ids)
       setSelectedIds([])
       commit((d) => {
+        d.connectors = d.connectors.filter(
+          (c) => !remove.has(c.fromId) && !remove.has(c.toId),
+        )
+        for (const x of d.elements) {
+          if (x.parentFolderId && remove.has(x.parentFolderId)) {
+            delete x.parentFolderId
+          }
+        }
         d.elements = d.elements.filter((x) => !remove.has(x.id))
       })
     }
@@ -1841,6 +2292,7 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
       commit((d) => {
         d.elements.push(next)
       })
+      setActiveTool('select')
       setSelectedIds([next.id])
       if (tool === 'text') {
         setEditing(next)
@@ -1855,29 +2307,35 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
     dragSession.current = null
     setDragPreviewById(null)
     if (!sess || sess.draggedId !== id) {
-      commit((d) => {
-        const found = d.elements.find((z) => z.id === id)
-        if (found) {
-          found.x = x
-          found.y = y
-        }
+      flushSync(() => {
+        commit((d) => {
+          const found = d.elements.find((z) => z.id === id)
+          if (found) {
+            found.x = x
+            found.y = y
+          }
+        })
       })
+      tryQueueFolderMerge(id, null)
       return
     }
     const origDragged = sess.origById.get(id)
     if (!origDragged) return
     const dx = x - origDragged.x
     const dy = y - origDragged.y
-    commit((d) => {
-      for (const sid of sess.ids) {
-        const found = d.elements.find((z) => z.id === sid)
-        const orig = sess.origById.get(sid)
-        if (found && orig) {
-          found.x = orig.x + dx
-          found.y = orig.y + dy
+    flushSync(() => {
+      commit((d) => {
+        for (const sid of sess.ids) {
+          const found = d.elements.find((z) => z.id === sid)
+          const orig = sess.origById.get(sid)
+          if (found && orig) {
+            found.x = orig.x + dx
+            found.y = orig.y + dy
+          }
         }
-      }
+      })
     })
+    tryQueueFolderMerge(id, sess)
   }
 
   const onDragStart = (id: string) => {
@@ -1888,9 +2346,12 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
       if (cur.includes(id)) return cur
       return [id]
     })
-    const ids = effectiveSelectedIdsRef.current.includes(id)
-      ? effectiveSelectedIdsRef.current
-      : [id]
+    const ids = expandDragIdsWithFolderContents(
+      effectiveSelectedIdsRef.current.includes(id)
+        ? effectiveSelectedIdsRef.current
+        : [id],
+      stateRef.current.elements,
+    )
     const origById = new Map<string, { x: number; y: number }>()
     for (const el of stateRef.current.elements) {
       if (ids.includes(el.id)) origById.set(el.id, { x: el.x, y: el.y })
@@ -1933,6 +2394,7 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
   } | null>(null)
   const [editLayoutTick, setEditLayoutTick] = useState(0)
   const textEditRef = useRef<HTMLTextAreaElement | null>(null)
+  const folderRenameInputRef = useRef<HTMLInputElement | null>(null)
   const [textColorMenuOpen, setTextColorMenuOpen] = useState(false)
   const textColorMenuRef = useRef<HTMLDivElement>(null)
   /** Text formatting toolbar (font/size selects); blur deferral avoids closing before native `<select>` opens. */
@@ -1954,6 +2416,17 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
       const stage = stageRef.current
       if (!stage) {
         setEditLayout(null)
+        return
+      }
+      if (editingLive.kind === 'folder') {
+        let d: CanvasElement = editingLive
+        if (dragPreviewById && dragPreviewById[editingLive.id]) {
+          const p = dragPreviewById[editingLive.id]!
+          d = { ...editingLive, x: p.x, y: p.y }
+        } else if (resizePreview && resizePreview.id === editingLive.id) {
+          d = resizePreview
+        }
+        setEditLayout(folderTitleScreenRect(stage, d, viewportMemo))
         return
       }
       const base = screenRectFromStage(stage, editingLive, viewportMemo)
@@ -1989,6 +2462,8 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
     editTextAlign,
     editTextColor,
     editLayoutTick,
+    dragPreviewById,
+    resizePreview,
   ])
 
   useEffect(() => {
@@ -2038,6 +2513,9 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
       return {
         padding: `${TEXT_PAD_Y}px ${TEXT_PAD_X}px`,
       }
+    }
+    if (editing.kind === 'folder') {
+      return { padding: '0 4px' }
     }
     return { padding: '12px', paddingLeft: 20 }
   }, [editing])
@@ -2090,6 +2568,7 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
         const ae = document.activeElement
         if (ae && textToolbarRef.current?.contains(ae)) return
         if (ae === textEditRef.current) return
+        if (ae === folderRenameInputRef.current) return
         closeEdit()
       })
     })
@@ -2135,6 +2614,7 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
       const anchors: Anchor[] = ['top', 'right', 'bottom', 'left']
       for (const [id, el] of elementByIdRef.current.entries()) {
         if (id === fromId) continue
+        if (el.parentFolderId) continue
         for (const a of anchors) {
           const ap = anchorWorldPos(el, a)
           const d = Math.hypot(ap.x - pos.x, ap.y - pos.y)
@@ -2196,6 +2676,7 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
         setSelectedConnectorId(nextId)
       }
       setConnectorDraft(null)
+      setActiveTool('select')
     }
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
@@ -2279,6 +2760,11 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
   const boardDropMsgTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   )
+  const [infoModalOpen, setInfoModalOpen] = useState(false)
+  const infoModalOpenRef = useRef(false)
+  useLayoutEffect(() => {
+    infoModalOpenRef.current = infoModalOpen
+  }, [infoModalOpen])
 
   const showBoardDropMessage = useCallback((msg: string) => {
     if (boardDropMsgTimerRef.current) {
@@ -2353,6 +2839,7 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
         commit((d) => {
           for (const el of additions) d.elements.push(el)
         })
+        setActiveTool('select')
         setSelectedIds(additions.map((x) => x.id))
       }
       const triedImages = list.filter(looksLikeImageAttempt).length
@@ -2433,6 +2920,7 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
     let overEl = false
     let overId: string | null = null
     for (const el of state.elements) {
+      if (el.parentFolderId) continue
       const d = displayElement(el)
       if (
         p.wx >= d.x &&
@@ -2452,7 +2940,7 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
 
   const normMarquee = marquee ? normalizeMarquee(marquee.x, marquee.y, marquee.width, marquee.height) : null
 
-  const dotStepPx = WORLD_DOT_STEP * vScale
+  const dotStepPx = SCREEN_DOT_GRID_STEP_PX
   const boardSurfaceStyle: CSSProperties = {
     position: 'fixed',
     inset: 0,
@@ -2464,7 +2952,449 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
     ['--folium-bg-y' as string]: `${modPositive(vy, dotStepPx)}px`,
   }
 
+  const modalPortal =
+    typeof document !== 'undefined'
+      ? createPortal(
+          <>
+            {folderNaming ? (
+              <div
+                role="presentation"
+                style={{
+                  position: 'fixed',
+                  inset: 0,
+                  zIndex: 12060,
+                  background: 'rgba(15, 23, 42, 0.42)',
+                  backdropFilter: 'blur(6px)',
+                  WebkitBackdropFilter: 'blur(6px)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  padding: 20,
+                }}
+                onMouseDown={(e) => {
+                  if (e.target === e.currentTarget) setFolderNaming(null)
+                }}
+              >
+                <div
+                  role="dialog"
+                  aria-modal="true"
+                  aria-label="Name folder"
+                  onMouseDown={(e) => e.stopPropagation()}
+                  style={{
+                    width: '100%',
+                    maxWidth: 380,
+                    background: 'rgba(255,255,255,0.92)',
+                    backdropFilter: 'blur(20px) saturate(160%)',
+                    WebkitBackdropFilter: 'blur(20px) saturate(160%)',
+                    borderRadius: 16,
+                    border: '1px solid rgba(255,255,255,0.65)',
+                    boxShadow:
+                      '0 24px 64px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.8)',
+                    padding: '22px 22px 18px',
+                    fontFamily: UI_SANS,
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+                    <img
+                      src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(MAC_FOLDER_SVG_MARKUP)}`}
+                      alt=""
+                      width={36}
+                      height={30}
+                      draggable={false}
+                      style={{ flexShrink: 0 }}
+                    />
+                    <h2
+                      style={{
+                        margin: 0,
+                        fontSize: 17,
+                        fontWeight: 600,
+                        color: '#111827',
+                        letterSpacing: '-0.02em',
+                      }}
+                    >
+                      New folder
+                    </h2>
+                  </div>
+                  <label
+                    htmlFor="folium-folder-name"
+                    style={{ display: 'block', fontSize: 12, color: '#6b7280', marginBottom: 6 }}
+                  >
+                    Name
+                  </label>
+                  <input
+                    ref={folderNameInputRef}
+                    id="folium-folder-name"
+                    type="text"
+                    value={folderNameDraft}
+                    onChange={(e) => setFolderNameDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault()
+                        confirmFolderNaming()
+                      }
+                    }}
+                    style={{
+                      width: '100%',
+                      boxSizing: 'border-box',
+                      padding: '10px 12px',
+                      fontSize: 14,
+                      borderRadius: 10,
+                      border: '1px solid rgba(0,0,0,0.1)',
+                      background: 'rgba(255,255,255,0.9)',
+                      fontFamily: UI_SANS,
+                      color: '#111827',
+                      outline: 'none',
+                    }}
+                  />
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'flex-end',
+                      gap: 10,
+                      marginTop: 18,
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setFolderNaming(null)}
+                      style={{
+                        padding: '8px 14px',
+                        fontSize: 13,
+                        fontWeight: 500,
+                        borderRadius: 10,
+                        border: 'none',
+                        background: 'rgba(0,0,0,0.06)',
+                        color: '#374151',
+                        cursor: 'pointer',
+                        fontFamily: UI_SANS,
+                      }}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => confirmFolderNaming()}
+                      style={{
+                        padding: '8px 16px',
+                        fontSize: 13,
+                        fontWeight: 600,
+                        borderRadius: 10,
+                        border: 'none',
+                        background: 'linear-gradient(180deg, #4f8fff 0%, #2f6eeb 100%)',
+                        color: '#ffffff',
+                        cursor: 'pointer',
+                        fontFamily: UI_SANS,
+                        boxShadow: '0 2px 8px rgba(47,110,235,0.35)',
+                      }}
+                    >
+                      Create
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            {folderViewerId && folderViewerFolder && folderViewerFolder.kind === 'folder' ? (
+              <div
+                role="presentation"
+                style={{
+                  position: 'fixed',
+                  inset: 0,
+                  zIndex: 12050,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  padding:
+                    'max(20px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right)) max(20px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left))',
+                }}
+              >
+                <div
+                  aria-hidden
+                  style={{
+                    position: 'absolute',
+                    inset: 0,
+                    background: 'rgba(10, 14, 28, 0.42)',
+                    backdropFilter: 'blur(56px) saturate(190%)',
+                    WebkitBackdropFilter: 'blur(56px) saturate(190%)',
+                    opacity: folderViewerEntered ? 1 : 0,
+                    transition: 'opacity 0.42s cubic-bezier(0.16, 1, 0.3, 1)',
+                  }}
+                  onMouseDown={closeFolderViewer}
+                />
+                <div
+                  role="dialog"
+                  aria-modal="true"
+                  aria-label={folderViewerFolder.text || 'Folder'}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  style={{
+                    position: 'relative',
+                    zIndex: 1,
+                    width: 'min(1120px, 100%)',
+                    height: 'min(88vh, 920px)',
+                    maxHeight: '100%',
+                    borderRadius: 32,
+                    background:
+                      'linear-gradient(165deg, rgba(255,255,255,0.72) 0%, rgba(245,248,255,0.58) 100%)',
+                    backdropFilter: 'blur(28px) saturate(165%)',
+                    WebkitBackdropFilter: 'blur(28px) saturate(165%)',
+                    border: '1px solid rgba(255,255,255,0.62)',
+                    boxShadow:
+                      '0 32px 96px rgba(0,0,0,0.2), inset 0 1px 0 rgba(255,255,255,0.85), inset 0 0 0 1px rgba(255,255,255,0.25)',
+                    transform: folderViewerEntered
+                      ? 'scale(1) translateY(0)'
+                      : 'scale(0.86) translateY(28px)',
+                    opacity: folderViewerEntered ? 1 : 0,
+                    transition:
+                      'transform 0.52s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.42s cubic-bezier(0.16, 1, 0.3, 1)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    overflow: 'hidden',
+                    fontFamily: UI_SANS,
+                  }}
+                >
+                  <header
+                    style={{
+                      flexShrink: 0,
+                      position: 'sticky',
+                      top: 0,
+                      zIndex: 2,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 12,
+                      padding: '18px 20px 14px',
+                      background: 'rgba(255,255,255,0.42)',
+                      backdropFilter: 'blur(32px) saturate(185%)',
+                      WebkitBackdropFilter: 'blur(32px) saturate(185%)',
+                      borderBottom: '1px solid rgba(255,255,255,0.45)',
+                      boxShadow:
+                        'inset 0 1px 0 rgba(255,255,255,0.65), 0 8px 32px rgba(0,0,0,0.04)',
+                    }}
+                  >
+                    <img
+                      src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(MAC_FOLDER_SVG_MARKUP)}`}
+                      alt=""
+                      width={40}
+                      height={33}
+                      draggable={false}
+                      style={{
+                        flexShrink: 0,
+                        cursor: 'default',
+                        filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.06))',
+                      }}
+                    />
+                    <h2
+                      style={{
+                        flex: 1,
+                        margin: 0,
+                        fontSize: 20,
+                        fontWeight: 600,
+                        color: '#0f172a',
+                        letterSpacing: '-0.03em',
+                      }}
+                    >
+                      {folderViewerFolder.text}
+                    </h2>
+                    <button
+                      type="button"
+                      aria-label="Close"
+                      onClick={closeFolderViewer}
+                      style={{
+                        width: 36,
+                        height: 36,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        padding: 0,
+                        border: 'none',
+                        borderRadius: 12,
+                        background: 'rgba(0,0,0,0.05)',
+                        color: '#475569',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <X size={20} strokeWidth={2} aria-hidden />
+                    </button>
+                  </header>
+                  <div
+                    style={{
+                      flex: 1,
+                      overflow: 'auto',
+                      padding: 20,
+                      boxSizing: 'border-box',
+                    }}
+                  >
+                    {folderViewerChildren.length === 0 ? (
+                      <p style={{ margin: 0, fontSize: 14, color: '#64748b' }}>
+                        No images in this folder.
+                      </p>
+                    ) : (
+                      <div
+                        style={{
+                          display: 'grid',
+                          gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))',
+                          gap: 14,
+                        }}
+                      >
+                        {folderViewerChildren.map((ch) => (
+                          <div
+                            key={ch.id}
+                            style={{
+                              borderRadius: 14,
+                              overflow: 'hidden',
+                              background: 'rgba(255,255,255,0.65)',
+                              border: '1px solid rgba(0,0,0,0.06)',
+                              boxShadow: '0 4px 16px rgba(0,0,0,0.06)',
+                            }}
+                          >
+                            {ch.imageSrc ? (
+                              <img
+                                src={ch.imageSrc}
+                                alt=""
+                                draggable={false}
+                                style={{
+                                  display: 'block',
+                                  width: '100%',
+                                  height: 160,
+                                  objectFit: 'cover',
+                                }}
+                              />
+                            ) : (
+                              <div
+                                style={{
+                                  height: 160,
+                                  background: '#e2e8f0',
+                                }}
+                              />
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            {infoModalOpen ? (
+              <div
+                role="presentation"
+                style={{
+                  position: 'fixed',
+                  inset: 0,
+                  zIndex: 12040,
+                  background: 'rgba(15, 23, 42, 0.45)',
+                  backdropFilter: 'blur(8px)',
+                  WebkitBackdropFilter: 'blur(8px)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  padding: 20,
+                  pointerEvents: 'auto',
+                }}
+                onMouseDown={(e) => {
+                  if (e.target === e.currentTarget) setInfoModalOpen(false)
+                }}
+              >
+                <div
+                  role="dialog"
+                  aria-modal="true"
+                  aria-label={`About ${APP_DISPLAY_NAME}`}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  style={{
+                    position: 'relative',
+                    width: '100%',
+                    maxWidth: 400,
+                    background: 'rgba(255,255,255,0.94)',
+                    backdropFilter: 'blur(16px) saturate(150%)',
+                    WebkitBackdropFilter: 'blur(16px) saturate(150%)',
+                    borderRadius: 12,
+                    border: '1px solid #e5e7eb',
+                    boxShadow: '0 20px 50px rgba(0,0,0,0.18)',
+                    padding: '22px 44px 20px 22px',
+                    fontFamily: UI_SANS,
+                    color: '#111827',
+                  }}
+                >
+                  <button
+                    type="button"
+                    aria-label="Close"
+                    onClick={() => setInfoModalOpen(false)}
+                    style={{
+                      position: 'absolute',
+                      top: 10,
+                      right: 10,
+                      width: 32,
+                      height: 32,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      padding: 0,
+                      border: 'none',
+                      borderRadius: 8,
+                      background: 'transparent',
+                      color: '#6b7280',
+                      cursor: 'pointer',
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = '#f3f4f6'
+                      e.currentTarget.style.color = '#111827'
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = 'transparent'
+                      e.currentTarget.style.color = '#6b7280'
+                    }}
+                  >
+                    <X size={18} strokeWidth={2} aria-hidden />
+                  </button>
+                  <div style={{ marginBottom: 14 }}>
+                    <img
+                      src="/logo.svg"
+                      alt={APP_DISPLAY_NAME}
+                      width={108}
+                      height={31}
+                      draggable={false}
+                      style={{
+                        display: 'block',
+                        height: 28,
+                        width: 'auto',
+                        maxWidth: '100%',
+                      }}
+                    />
+                  </div>
+                  <p style={{ margin: '10px 0 0', fontSize: 13, color: '#6b7280' }}>
+                    Version <strong style={{ color: '#374151' }}>{APP_VERSION}</strong>
+                  </p>
+                  <p
+                    style={{
+                      margin: '14px 0 0',
+                      fontSize: 13,
+                      lineHeight: 1.55,
+                      color: '#374151',
+                    }}
+                  >
+                    © {new Date().getFullYear()} {APP_DISPLAY_NAME}. All rights reserved.
+                  </p>
+                  <p
+                    style={{
+                      margin: '12px 0 0',
+                      fontSize: 12,
+                      lineHeight: 1.5,
+                      color: '#6b7280',
+                    }}
+                  >
+                    This software is provided for your use as-is. Third-party libraries used in
+                    this project retain their respective licenses.
+                  </p>
+                </div>
+              </div>
+            ) : null}
+          </>,
+          document.body,
+        )
+      : null
+
   return (
+    <>
     <div
       ref={wrapRef}
       className="folium-board-bg"
@@ -2596,7 +3526,7 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
           ) : null}
         </Layer>
         <Layer>
-          {state.elements.map((el) => (
+          {rootElements.map((el) => (
             <CanvasElementNode
               key={el.id}
               el={el}
@@ -2620,6 +3550,7 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
               onDragMove={onDragMove}
               onDragEnd={onDragEnd}
               onEditRequest={onEditRequest}
+              onFolderOpen={openFolderViewer}
             />
           ))}
           {pencilDraft ? (
@@ -2635,6 +3566,7 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
               onDragMove={() => {}}
               onDragEnd={() => {}}
               onEditRequest={() => {}}
+              onFolderOpen={() => {}}
             />
           ) : null}
         </Layer>
@@ -2729,7 +3661,7 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
           })
         }
 
-        const ids = state.elements.map((e) => e.id)
+        const ids = rootElements.map((e) => e.id)
 
         const anchors: Anchor[] = ['top', 'right', 'bottom', 'left']
         const s = viewportMemo
@@ -3155,7 +4087,48 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
         </div>
       ) : null}
 
-      {editLayout ? (
+      {editLayout && editing?.kind === 'folder' ? (
+        <input
+          ref={folderRenameInputRef}
+          type="text"
+          aria-label="Folder name"
+          style={{
+            position: 'fixed',
+            left: editLayout.left,
+            top: editLayout.top,
+            width: editLayout.width,
+            height: editLayout.height,
+            zIndex: 1200,
+            fontSize: Math.max(12, Math.round(11 * viewportMemo.scale)),
+            fontFamily: UI_SANS,
+            color: '#374151',
+            border: 'none',
+            outline: 'none',
+            background: 'rgba(255,255,255,0.96)',
+            boxSizing: 'border-box',
+            pointerEvents: 'auto',
+            boxShadow: '0 0 0 2px #3b82f6',
+            borderRadius: 6,
+            ...textareaPaddingStyle,
+          }}
+          value={editText}
+          onChange={(ev: ChangeEvent<HTMLInputElement>) =>
+            setEditText(ev.target.value)
+          }
+          onBlur={handleTextareaBlur}
+          onKeyDown={(ev) => {
+            if (ev.key === 'Escape') {
+              ev.preventDefault()
+              closeEdit()
+            }
+            if (ev.key === 'Enter') {
+              ev.preventDefault()
+              closeEdit()
+            }
+          }}
+          autoFocus
+        />
+      ) : editLayout ? (
         <textarea
           ref={textEditRef}
           style={{
@@ -3443,36 +4416,56 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
         </div>
       ) : null}
 
-      <div style={zoomBarStyle}>
-        <button
-          type="button"
-          title="Zoom out"
-          style={zoomBtnStyle}
-          onClick={() => zoomFromCenter(1 / ZOOM_STEP)}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = '#f3f4f6'
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = 'transparent'
-          }}
-        >
-          <IconZoomOut />
-        </button>
-        <span style={zoomPercentStyle}>{Math.round(vScale * 100)}%</span>
-        <button
-          type="button"
-          title="Zoom in"
-          style={zoomBtnStyle}
-          onClick={() => zoomFromCenter(ZOOM_STEP)}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = '#f3f4f6'
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = 'transparent'
-          }}
-        >
-          <IconZoomIn />
-        </button>
+      <div style={canvasBottomRightClusterStyle}>
+        <div style={zoomBarStyle}>
+          <button
+            type="button"
+            title="Zoom out"
+            style={zoomBtnStyle}
+            onClick={() => zoomFromCenter(1 / ZOOM_STEP)}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = '#f3f4f6'
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = 'transparent'
+            }}
+          >
+            <IconZoomOut />
+          </button>
+          <span style={zoomPercentStyle}>{Math.round(vScale * 100)}%</span>
+          <button
+            type="button"
+            title="Zoom in"
+            style={zoomBtnStyle}
+            onClick={() => zoomFromCenter(ZOOM_STEP)}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = '#f3f4f6'
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = 'transparent'
+            }}
+          >
+            <IconZoomIn />
+          </button>
+        </div>
+        <div style={infoCtaBarStyle}>
+          <button
+            type="button"
+            title="About Folium"
+            aria-haspopup="dialog"
+            aria-expanded={infoModalOpen}
+            style={zoomBtnStyle}
+            onClick={() => setInfoModalOpen(true)}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = '#f3f4f6'
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = 'transparent'
+            }}
+          >
+            <CircleHelp size={18} strokeWidth={1.75} aria-hidden />
+          </button>
+        </div>
       </div>
 
       {boardDropMessage ? (
@@ -3501,5 +4494,7 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
         </div>
       ) : null}
     </div>
+    {modalPortal}
+    </>
   )
 }
