@@ -1,4 +1,4 @@
-export type ElementKind = 'note' | 'task' | 'card' | 'text' | 'image'
+export type ElementKind = 'note' | 'task' | 'card' | 'text' | 'image' | 'pencil'
 
 /** Konva Text.fontStyle values we persist for the text tool. */
 export type TextFontStyleKonva =
@@ -19,6 +19,13 @@ export interface CanvasElement {
   text: string
   /** Fill (note/card) or left accent bar color (task). */
   color: string
+  /**
+   * `kind === 'pencil'`: polyline points in local coords relative to (x,y),
+   * as `[x1,y1,x2,y2,...]` in world pixels.
+   */
+  points?: number[]
+  /** `kind === 'pencil'`: stroke width in world px. */
+  strokeWidth?: number
   /**
    * Raster image as data URL (`image/jpeg` | `png` | `webp` | `gif`).
    * Present only when `kind === 'image'`.
@@ -169,41 +176,35 @@ export const DEFAULT_STATE: CanvasState = {
   viewport: { x: 0, y: 0, scale: 1 },
 }
 
-/** Default fill colors for sticky notes (cycle in UI). */
-export const NOTE_COLORS = [
-  '#fef08a',
-  '#bbf7d0',
-  '#fbcfe8',
-  '#bfdbfe',
-  '#e9d5ff',
+/**
+ * FigJam-style unified palette: each row pairs a soft fill (sticky / card tint)
+ * with a standard ink (text, pencil, task accent). Same order in every color bar.
+ */
+export const FIGJAM_CANVAS_SWATCHES = [
+  { fill: '#FEF9C3', ink: '#A16207' },
+  { fill: '#DCFCE7', ink: '#15803D' },
+  { fill: '#FCE7F3', ink: '#BE185D' },
+  { fill: '#DBEAFE', ink: '#1D4ED8' },
+  { fill: '#EDE9FE', ink: '#6D28D9' },
+  { fill: '#FEE2E2', ink: '#DC2626' },
+  { fill: '#FFEDD5', ink: '#EA580C' },
+  { fill: '#F3F4F6', ink: '#111827' },
 ] as const
 
-/** Default fill colors for cards. */
+/** Sticky note fills (same hues as FigJam toolbar). */
+export const NOTE_COLORS = FIGJAM_CANVAS_SWATCHES.map((s) => s.fill)
+
+/** Card fills: white first, then the same tints as notes. */
 export const CARD_COLORS = [
-  '#ffffff',
-  '#f0fdf4',
-  '#fef9c3',
-  '#fce7f3',
-  '#eff6ff',
+  '#FFFFFF',
+  ...FIGJAM_CANVAS_SWATCHES.map((s) => s.fill),
 ] as const
 
-/** Left accent bar colors for tasks. */
-export const TASK_ACCENT_COLORS = [
-  '#3b82f6',
-  '#10b981',
-  '#f59e0b',
-  '#ef4444',
-  '#8b5cf6',
-] as const
+/** Task left accent = ink colors. */
+export const TASK_ACCENT_COLORS = FIGJAM_CANVAS_SWATCHES.map((s) => s.ink)
 
-/** Text / paragraph tool: used as Konva Text fill. */
-export const TEXT_COLORS = [
-  '#111827',
-  '#374151',
-  '#1d4ed8',
-  '#b45309',
-  '#be123c',
-] as const
+/** Text / pencil strokes = same inks as task accents. */
+export const TEXT_COLORS = FIGJAM_CANVAS_SWATCHES.map((s) => s.ink)
 
 export const ELEMENT_DEFAULTS: Record<
   ElementKind,
@@ -225,19 +226,25 @@ export const ELEMENT_DEFAULTS: Record<
     width: 220,
     height: 44,
     text: '• Task',
-    color: TASK_ACCENT_COLORS[0],
+    color: TEXT_COLORS[3],
   },
   text: {
     width: 240,
     height: 40,
     text: '',
-    color: TEXT_COLORS[0],
+    color: TEXT_COLORS[7],
   },
   image: {
     width: 320,
     height: 240,
     text: '',
     color: '#e5e7eb',
+  },
+  pencil: {
+    width: 140,
+    height: 120,
+    text: '',
+    color: TEXT_COLORS[7],
   },
 }
 
@@ -247,7 +254,8 @@ function isElementKind(v: unknown): v is ElementKind {
     v === 'task' ||
     v === 'card' ||
     v === 'text' ||
-    v === 'image'
+    v === 'image' ||
+    v === 'pencil'
   )
 }
 
@@ -265,6 +273,20 @@ function isCanvasElement(v: unknown): v is CanvasElement {
     typeof o.color !== 'string'
   ) {
     return false
+  }
+  if (o.kind === 'pencil') {
+    if (!Array.isArray(o.points)) return false
+    if (o.points.length < 4) return false
+    if (!o.points.every((n) => typeof n === 'number' && Number.isFinite(n))) {
+      return false
+    }
+    if (
+      typeof o.strokeWidth !== 'number' ||
+      !Number.isFinite(o.strokeWidth) ||
+      o.strokeWidth <= 0
+    ) {
+      return false
+    }
   }
   if (o.kind === 'image') {
     return typeof o.imageSrc === 'string' && o.imageSrc.length > 0

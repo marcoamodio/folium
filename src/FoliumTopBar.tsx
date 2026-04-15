@@ -51,9 +51,12 @@ export function FoliumTopBar() {
     <header className="folium-top-bar">
       <div className="folium-top-bar__inner">
         <div className="folium-top-bar__logo-wrap">
-          <span className="folium-top-bar__logo-text" aria-label="Folium">
-            Folium
-          </span>
+          <img
+            className="folium-top-bar__logo"
+            src="/logo.svg"
+            alt="Folium"
+            draggable={false}
+          />
         </div>
         <div
           className={`folium-top-bar__status folium-top-bar__status--${status}`}

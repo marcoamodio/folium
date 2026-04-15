@@ -170,13 +170,13 @@ body,
   pointer-events: none;
 }
 
-.folium-top-bar__logo-text {
-  font-size: 14px;
-  font-weight: 650;
-  letter-spacing: -0.02em;
-  color: rgba(17, 24, 39, 0.9);
+.folium-top-bar__logo {
+  display: block;
+  height: 18px;
+  width: auto;
   user-select: none;
-  white-space: nowrap;
+  -webkit-user-drag: none;
+  opacity: 0.92;
 }
 
 .folium-top-bar__status {

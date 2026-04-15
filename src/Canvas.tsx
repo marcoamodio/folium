@@ -2,6 +2,7 @@ import Konva from 'konva'
 import {
   ListChecks,
   MousePointer2,
+  Pencil,
   Square,
   StickyNote,
   Type,
@@ -21,6 +22,7 @@ import {
   Group,
   Image as KonvaImage,
   Layer,
+  Line,
   Rect,
   Stage,
   Text,
@@ -316,7 +318,7 @@ function measureTextBlockHeight(
   return Math.max(MIN_ELEMENT_H, Math.ceil(innerH + TEXT_PAD_Y * 2))
 }
 
-type ActiveTool = 'select' | 'note' | 'task' | 'card' | 'text' | 'connect'
+type ActiveTool = 'select' | 'note' | 'task' | 'card' | 'text' | 'connect' | 'pencil'
 type HandleId = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w'
 
 function clamp(n: number, min: number, max: number): number {
@@ -531,8 +533,9 @@ type CanvasElementNodeProps = {
   editing: boolean
   /** FigJam-style: Space = hand tool; elements ignore pointer so pan works on top of them. */
   handMode: boolean
-  onSelect: (id: string) => void
+  onSelect: (id: string, evt: MouseEvent) => void
   onDragStart: (id: string) => void
+  onDragMove: (id: string, x: number, y: number) => void
   onDragEnd: (id: string, x: number, y: number) => void
   onEditRequest: (el: CanvasElement) => void
 }
@@ -545,6 +548,7 @@ function CanvasElementNode({
   handMode,
   onSelect,
   onDragStart,
+  onDragMove,
   onDragEnd,
   onEditRequest,
 }: CanvasElementNodeProps) {
@@ -569,9 +573,12 @@ function CanvasElementNode({
         onClick={(e: Konva.KonvaEventObject<MouseEvent>) => {
           if (e.evt.button !== 0) return
           e.cancelBubble = true
-          onSelect(el.id)
+          onSelect(el.id, e.evt)
         }}
         onDragStart={() => onDragStart(el.id)}
+        onDragMove={(e: Konva.KonvaEventObject<DragEvent>) => {
+          onDragMove(el.id, e.target.x(), e.target.y())
+        }}
         onDragEnd={(e: Konva.KonvaEventObject<DragEvent>) => {
           onDragEnd(el.id, e.target.x(), e.target.y())
         }}
@@ -636,9 +643,12 @@ function CanvasElementNode({
         onClick={(e: Konva.KonvaEventObject<MouseEvent>) => {
           if (e.evt.button !== 0) return
           e.cancelBubble = true
-          onSelect(el.id)
+          onSelect(el.id, e.evt)
         }}
         onDragStart={() => onDragStart(el.id)}
+        onDragMove={(e: Konva.KonvaEventObject<DragEvent>) => {
+          onDragMove(el.id, e.target.x(), e.target.y())
+        }}
         onDragEnd={(e: Konva.KonvaEventObject<DragEvent>) => {
           onDragEnd(el.id, e.target.x(), e.target.y())
         }}
@@ -694,9 +704,12 @@ function CanvasElementNode({
         onClick={(e: Konva.KonvaEventObject<MouseEvent>) => {
           if (e.evt.button !== 0) return
           e.cancelBubble = true
-          onSelect(el.id)
+          onSelect(el.id, e.evt)
         }}
         onDragStart={() => onDragStart(el.id)}
+        onDragMove={(e: Konva.KonvaEventObject<DragEvent>) => {
+          onDragMove(el.id, e.target.x(), e.target.y())
+        }}
         onDragEnd={(e: Konva.KonvaEventObject<DragEvent>) => {
           onDragEnd(el.id, e.target.x(), e.target.y())
         }}
@@ -754,9 +767,12 @@ function CanvasElementNode({
         onClick={(e: Konva.KonvaEventObject<MouseEvent>) => {
           if (e.evt.button !== 0) return
           e.cancelBubble = true
-          onSelect(el.id)
+          onSelect(el.id, e.evt)
         }}
         onDragStart={() => onDragStart(el.id)}
+        onDragMove={(e: Konva.KonvaEventObject<DragEvent>) => {
+          onDragMove(el.id, e.target.x(), e.target.y())
+        }}
         onDragEnd={(e: Konva.KonvaEventObject<DragEvent>) => {
           onDragEnd(el.id, e.target.x(), e.target.y())
         }}
@@ -796,6 +812,52 @@ function CanvasElementNode({
     )
   }
 
+  if (display.kind === 'pencil') {
+    const pts = display.points ?? []
+    const sw = display.strokeWidth ?? 4
+    return (
+      <Group
+        x={display.x}
+        y={display.y}
+        listening={canInteract}
+        draggable={canInteract}
+        onMouseDown={stopBubbleForItemDrag}
+        onClick={(e: Konva.KonvaEventObject<MouseEvent>) => {
+          if (e.evt.button !== 0) return
+          e.cancelBubble = true
+          onSelect(el.id, e.evt)
+        }}
+        onDragStart={() => onDragStart(el.id)}
+        onDragMove={(e: Konva.KonvaEventObject<DragEvent>) => {
+          onDragMove(el.id, e.target.x(), e.target.y())
+        }}
+        onDragEnd={(e: Konva.KonvaEventObject<DragEvent>) => {
+          onDragEnd(el.id, e.target.x(), e.target.y())
+        }}
+      >
+        <Line
+          points={pts}
+          stroke={display.color}
+          strokeWidth={sw}
+          lineCap="round"
+          lineJoin="round"
+          tension={0}
+          listening={false}
+        />
+        {selected ? (
+          <Rect
+            width={display.width}
+            height={display.height}
+            stroke="#3b82f6"
+            strokeWidth={1.25}
+            dash={[6, 5]}
+            listening={false}
+          />
+        ) : null}
+      </Group>
+    )
+  }
+
   return (
     <Group
       x={display.x}
@@ -806,9 +868,12 @@ function CanvasElementNode({
       onClick={(e: Konva.KonvaEventObject<MouseEvent>) => {
         if (e.evt.button !== 0) return
         e.cancelBubble = true
-        onSelect(el.id)
+        onSelect(el.id, e.evt)
       }}
       onDragStart={() => onDragStart(el.id)}
+      onDragMove={(e: Konva.KonvaEventObject<DragEvent>) => {
+        onDragMove(el.id, e.target.x(), e.target.y())
+      }}
       onDragEnd={(e: Konva.KonvaEventObject<DragEvent>) => {
         onDragEnd(el.id, e.target.x(), e.target.y())
       }}
@@ -1214,6 +1279,20 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
   const [draggingElementId, setDraggingElementId] = useState<string | null>(
     null,
   )
+  const dragSession = useRef<{
+    draggedId: string
+    ids: string[]
+    origById: Map<string, { x: number; y: number }>
+  } | null>(null)
+
+  const [dragPreviewById, setDragPreviewById] = useState<
+    Record<string, { x: number; y: number }> | null
+  >(null)
+
+  const [pencilColor, setPencilColor] = useState<string>(TEXT_COLORS[7])
+  const [pencilSize, setPencilSize] = useState(4)
+  const [pencilDraft, setPencilDraft] = useState<CanvasElement | null>(null)
+  const pencilDraftRef = useRef<CanvasElement | null>(null)
   const [hoverHandle, setHoverHandle] = useState<HandleId | null>(null)
   const [hoverElement, setHoverElement] = useState(false)
   const [hoveredElementId, setHoveredElementId] = useState<string | null>(null)
@@ -1248,6 +1327,10 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
   useLayoutEffect(() => {
     connectorDraftRef.current = connectorDraft
   }, [connectorDraft])
+
+  useLayoutEffect(() => {
+    pencilDraftRef.current = pencilDraft
+  }, [pencilDraft])
 
   useLayoutEffect(() => {
     return subscribeCanvasPersistence({
@@ -1329,6 +1412,26 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
       window.removeEventListener('blur', up)
     }
   }, [endPan])
+
+  useEffect(() => {
+    const onUp = () => {
+      const d = pencilDraftRef.current
+      if (!d) return
+      setPencilDraft(null)
+      pencilDraftRef.current = null
+      if ((d.points?.length ?? 0) < 4) return
+      commit((st) => {
+        st.elements.push(d)
+      })
+      setSelectedIds([d.id])
+    }
+    window.addEventListener('mouseup', onUp)
+    window.addEventListener('blur', onUp)
+    return () => {
+      window.removeEventListener('mouseup', onUp)
+      window.removeEventListener('blur', onUp)
+    }
+  }, [commit])
 
   const marqueeListenersRef = useRef<{
     onMove: (e: MouseEvent) => void
@@ -1468,6 +1571,34 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
     }
 
     if (
+      e.evt.button === 0 &&
+      !spaceDown.current &&
+      activeTool === 'pencil' &&
+      !editing
+    ) {
+      const w = worldFromPointer(stage, viewportMemo)
+      if (!w) return
+      e.cancelBubble = true
+      setSelectedConnectorId(null)
+      setSelectedIds([])
+      const id = crypto.randomUUID()
+      const sw = Math.max(1, Math.round(pencilSize))
+      setPencilDraft({
+        id,
+        kind: 'pencil',
+        x: w.wx,
+        y: w.wy,
+        width: 1,
+        height: 1,
+        text: '',
+        color: pencilColor,
+        strokeWidth: sw,
+        points: [0, 0],
+      })
+      return
+    }
+
+    if (
       onBg &&
       e.evt.button === 0 &&
       activeTool === 'select' &&
@@ -1479,6 +1610,56 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
   }
 
   const handleStageMouseMove = (e: Konva.KonvaEventObject<MouseEvent>) => {
+    if (pencilDraftRef.current) {
+      const stage = e.target.getStage()
+      if (!stage) return
+      const w = worldFromPointer(stage, viewportMemo)
+      if (!w) return
+      const d = pencilDraftRef.current
+      const pts = d.points ?? []
+      const lastX = (pts[pts.length - 2] ?? 0) + d.x
+      const lastY = (pts[pts.length - 1] ?? 0) + d.y
+      const dx = w.wx - lastX
+      const dy = w.wy - lastY
+      if (dx * dx + dy * dy < 0.75 * 0.75) return
+
+      const absPts: number[] = []
+      for (let i = 0; i < pts.length; i += 2) {
+        absPts.push(pts[i]! + d.x, pts[i + 1]! + d.y)
+      }
+      absPts.push(w.wx, w.wy)
+
+      let minX = absPts[0] ?? w.wx
+      let minY = absPts[1] ?? w.wy
+      let maxX = minX
+      let maxY = minY
+      for (let i = 0; i < absPts.length; i += 2) {
+        const x = absPts[i]!
+        const y = absPts[i + 1]!
+        minX = Math.min(minX, x)
+        minY = Math.min(minY, y)
+        maxX = Math.max(maxX, x)
+        maxY = Math.max(maxY, y)
+      }
+
+      const sw = d.strokeWidth ?? 4
+      const pad = sw / 2 + 2
+      const nx = minX - pad
+      const ny = minY - pad
+      const local: number[] = []
+      for (let i = 0; i < absPts.length; i += 2) {
+        local.push(absPts[i]! - nx, absPts[i + 1]! - ny)
+      }
+      setPencilDraft({
+        ...d,
+        x: nx,
+        y: ny,
+        width: maxX - minX + pad * 2,
+        height: maxY - minY + pad * 2,
+        points: local,
+      })
+      return
+    }
     if (!panning.current) return
     const { cx, cy, vx: ox, vy: oy } = panOrigin.current
     setPanDraft({
@@ -1652,6 +1833,7 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
     if (spaceDown.current) return
     setSelectedConnectorId(null)
     if (activeTool !== 'select' && activeTool !== 'connect') {
+      if (activeTool === 'pencil') return
       const w = worldFromPointer(stage, viewportMemo)
       if (!w) return
       const tool = activeTool
@@ -1659,7 +1841,6 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
       commit((d) => {
         d.elements.push(next)
       })
-      setActiveTool('select')
       setSelectedIds([next.id])
       if (tool === 'text') {
         setEditing(next)
@@ -1670,13 +1851,67 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
 
   const onDragEnd = (id: string, x: number, y: number) => {
     setDraggingElementId(null)
+    const sess = dragSession.current
+    dragSession.current = null
+    setDragPreviewById(null)
+    if (!sess || sess.draggedId !== id) {
+      commit((d) => {
+        const found = d.elements.find((z) => z.id === id)
+        if (found) {
+          found.x = x
+          found.y = y
+        }
+      })
+      return
+    }
+    const origDragged = sess.origById.get(id)
+    if (!origDragged) return
+    const dx = x - origDragged.x
+    const dy = y - origDragged.y
     commit((d) => {
-      const found = d.elements.find((x) => x.id === id)
-      if (found) {
-        found.x = x
-        found.y = y
+      for (const sid of sess.ids) {
+        const found = d.elements.find((z) => z.id === sid)
+        const orig = sess.origById.get(sid)
+        if (found && orig) {
+          found.x = orig.x + dx
+          found.y = orig.y + dy
+        }
       }
     })
+  }
+
+  const onDragStart = (id: string) => {
+    setDraggingElementId(id)
+    updateCursor()
+    setSelectedConnectorId(null)
+    setSelectedIds((cur) => {
+      if (cur.includes(id)) return cur
+      return [id]
+    })
+    const ids = effectiveSelectedIdsRef.current.includes(id)
+      ? effectiveSelectedIdsRef.current
+      : [id]
+    const origById = new Map<string, { x: number; y: number }>()
+    for (const el of stateRef.current.elements) {
+      if (ids.includes(el.id)) origById.set(el.id, { x: el.x, y: el.y })
+    }
+    dragSession.current = { draggedId: id, ids, origById }
+  }
+
+  const onDragMove = (id: string, x: number, y: number) => {
+    const sess = dragSession.current
+    if (!sess || sess.draggedId !== id) return
+    const origDragged = sess.origById.get(id)
+    if (!origDragged) return
+    const dx = x - origDragged.x
+    const dy = y - origDragged.y
+    const next: Record<string, { x: number; y: number }> = {}
+    for (const sid of sess.ids) {
+      const orig = sess.origById.get(sid)
+      if (!orig) continue
+      next[sid] = { x: orig.x + dx, y: orig.y + dy }
+    }
+    setDragPreviewById(next)
   }
 
   const [editing, setEditing] = useState<CanvasElement | null>(null)
@@ -1689,7 +1924,7 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
     useState<TextFontStyleKonva>('normal')
   const [editTextAlign, setEditTextAlign] =
     useState<TextAlignKonva>('left')
-  const [editTextColor, setEditTextColor] = useState<string>(TEXT_COLORS[0])
+  const [editTextColor, setEditTextColor] = useState<string>(TEXT_COLORS[7])
   const [editLayout, setEditLayout] = useState<{
     left: number
     top: number
@@ -1868,10 +2103,14 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
 
   const displayElement = useCallback(
     (el: CanvasElement): CanvasElement => {
+      if (dragPreviewById && dragPreviewById[el.id]) {
+        const p = dragPreviewById[el.id]!
+        return { ...el, x: p.x, y: p.y }
+      }
       if (resizePreview && resizePreview.id === el.id) return resizePreview
       return el
     },
-    [resizePreview],
+    [resizePreview, dragPreviewById],
   )
 
   const elementById = useMemo(() => {
@@ -2032,7 +2271,7 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
         ? CARD_COLORS
         : firstSelectedKind === 'task'
           ? TASK_ACCENT_COLORS
-          : firstSelectedKind === 'text'
+          : firstSelectedKind === 'text' || firstSelectedKind === 'pencil'
             ? TEXT_COLORS
             : []
 
@@ -2115,7 +2354,6 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
           for (const el of additions) d.elements.push(el)
         })
         setSelectedIds(additions.map((x) => x.id))
-        setActiveTool('select')
       }
       const triedImages = list.filter(looksLikeImageAttempt).length
       if (skipped > 0 && triedImages > 0) {
@@ -2366,18 +2604,39 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
               selected={effectiveSelectedIds.includes(el.id)}
               editing={editing?.id === el.id}
               handMode={handMode}
-              onSelect={(id) => {
+              onSelect={(id, evt) => {
                 setSelectedConnectorId(null)
-                setSelectedIds([id])
+                const additive = evt.shiftKey || evt.metaKey || evt.ctrlKey
+                if (!additive) {
+                  setSelectedIds([id])
+                  return
+                }
+                setSelectedIds((cur) => {
+                  if (cur.includes(id)) return cur.filter((x) => x !== id)
+                  return [...cur, id]
+                })
               }}
-              onDragStart={(id) => {
-                setDraggingElementId(id)
-                updateCursor()
-              }}
+              onDragStart={onDragStart}
+              onDragMove={onDragMove}
               onDragEnd={onDragEnd}
               onEditRequest={onEditRequest}
             />
           ))}
+          {pencilDraft ? (
+            <CanvasElementNode
+              key={pencilDraft.id}
+              el={pencilDraft}
+              display={pencilDraft}
+              selected={false}
+              editing={false}
+              handMode={true}
+              onSelect={(_id, _evt) => {}}
+              onDragStart={() => {}}
+              onDragMove={() => {}}
+              onDragEnd={() => {}}
+              onEditRequest={() => {}}
+            />
+          ) : null}
         </Layer>
         {singleSelectedEl && !editing ? (
           <Layer>
@@ -2408,13 +2667,69 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
         if (!canShow) return null
 
         const showingAll = activeTool === 'connect'
-        const targetId = showingAll ? null : hoveredElementId
-        if (!showingAll && !targetId) return null
-        if (!showingAll && effectiveSelectedIds.includes(targetId)) return null
+        if (!showingAll) {
+          const targetId = hoveredElementId
+          if (!targetId) return null
+          if (effectiveSelectedIds.includes(targetId)) return null
+          const ids = [targetId]
+          const anchors: Anchor[] = ['top', 'right', 'bottom', 'left']
+          const s = viewportMemo
+          return ids.flatMap((id) => {
+            const el = elementById.get(id)
+            if (!el) return []
+            return anchors.map((a) => {
+              const key = `${id}:${a}`
+              const wpos = anchorWorldPos(el, a)
+              const p = screenPointFromStage(stage, wpos, s)
+              const hovered = hoveredAnchorKey === key
+              const snapped =
+                connectorDraft?.snappedTo?.toId === id &&
+                connectorDraft?.snappedTo?.toAnchor === a
+              return (
+                <div
+                  key={key}
+                  role="button"
+                  aria-label={`Anchor ${a}`}
+                  onMouseEnter={() => setHoveredAnchorKey(key)}
+                  onMouseLeave={() =>
+                    setHoveredAnchorKey((cur) => (cur === key ? null : cur))
+                  }
+                  onMouseDown={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    setSelectedIds([])
+                    setSelectedConnectorId(null)
+                    setConnectorDraft({
+                      fromId: id,
+                      fromAnchor: a,
+                      toWorldPos: wpos,
+                      snappedTo: null,
+                    })
+                  }}
+                  style={{
+                    position: 'fixed',
+                    left: p.left - 6,
+                    top: p.top - 6,
+                    width: 12,
+                    height: 12,
+                    borderRadius: '50%',
+                    border: '2px solid #3b82f6',
+                    background: hovered ? '#3b82f6' : '#ffffff',
+                    boxSizing: 'border-box',
+                    cursor: 'crosshair',
+                    zIndex: 1200,
+                    pointerEvents: 'auto',
+                    boxShadow: snapped
+                      ? '0 0 0 3px rgba(59,130,246,0.25)'
+                      : undefined,
+                  }}
+                />
+              )
+            })
+          })
+        }
 
-        const ids = showingAll
-          ? state.elements.map((e) => e.id)
-          : [targetId]
+        const ids = state.elements.map((e) => e.id)
 
         const anchors: Anchor[] = ['top', 'right', 'bottom', 'left']
         const s = viewportMemo
@@ -3013,6 +3328,26 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
         </button>
         <button
           type="button"
+          title="Pencil"
+          style={{
+            ...toolBtnBase,
+            background: activeTool === 'pencil' ? '#eff6ff' : 'transparent',
+            color: activeTool === 'pencil' ? '#3b82f6' : '#374151',
+          }}
+          onMouseEnter={(e) => {
+            if (activeTool !== 'pencil')
+              e.currentTarget.style.background = '#f3f4f6'
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background =
+              activeTool === 'pencil' ? '#eff6ff' : 'transparent'
+          }}
+          onClick={() => setActiveTool('pencil')}
+        >
+          <Pencil size={SIDENAV_ICON_PX} strokeWidth={1.75} aria-hidden />
+        </button>
+        <button
+          type="button"
           title="Connect"
           style={{
             ...toolBtnBase,
@@ -3044,6 +3379,67 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
               onClick={() => applyColorsToSelection(c)}
             />
           ))}
+        </div>
+      ) : null}
+
+      {activeTool === 'pencil' ? (
+        <div style={{ ...swatchPanelStyle, gap: 10, padding: '10px 12px' }}>
+          <div
+            style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: 8,
+              alignItems: 'center',
+              maxWidth: 220,
+            }}
+          >
+            {TEXT_COLORS.map((c) => (
+              <button
+                key={c}
+                type="button"
+                title={c}
+                style={{
+                  ...swatchBtn,
+                  background: c,
+                  boxShadow:
+                    pencilColor === c
+                      ? '0 0 0 2px rgba(59,130,246,0.85)'
+                      : swatchBtn.boxShadow,
+                }}
+                onClick={() => setPencilColor(c)}
+              />
+            ))}
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            {[2, 4, 8, 12].map((s) => (
+              <button
+                key={s}
+                type="button"
+                title={`Size ${s}`}
+                onClick={() => setPencilSize(s)}
+                style={{
+                  width: 34,
+                  height: 34,
+                  borderRadius: 10,
+                  border: '1px solid rgba(0,0,0,0.08)',
+                  background: pencilSize === s ? '#eff6ff' : '#ffffff',
+                  display: 'grid',
+                  placeItems: 'center',
+                  cursor: 'pointer',
+                }}
+              >
+                <span
+                  style={{
+                    display: 'block',
+                    width: s + 6,
+                    height: s + 6,
+                    borderRadius: 999,
+                    background: pencilColor,
+                  }}
+                />
+              </button>
+            ))}
+          </div>
         </div>
       ) : null}
 
