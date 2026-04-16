@@ -2,12 +2,15 @@ import Konva from 'konva'
 import {
   ChevronLeft,
   ChevronRight,
+  Circle,
   CircleHelp,
+  Diamond,
   ListChecks,
   MousePointer2,
   Pencil,
+  Shapes,
   Square,
-  StickyNote,
+  Triangle,
   Type,
   X,
 } from 'lucide-react'
@@ -23,6 +26,7 @@ import {
 import { createPortal, flushSync } from 'react-dom'
 import {
   Arrow,
+  Ellipse,
   Group,
   Image as KonvaImage,
   Layer,
@@ -43,17 +47,16 @@ import type {
 } from './types'
 import {
   ALLOWED_IMAGE_MIME_TYPES,
-  CARD_COLORS,
   defaultTextFontFamily,
   ELEMENT_DEFAULTS,
   MAX_IMAGE_UPLOAD_BYTES,
+  MURAL_TEXT_PALETTE,
   NOTE_COLORS,
   resolveTextAlign,
   resolveTextFontFamily,
   resolveTextFontSize,
   resolveTextFontStyle,
   TASK_ACCENT_COLORS,
-  TEXT_COLORS,
   TEXT_FONT_PRESETS,
   TEXT_FONT_SIZE_DEFAULT,
   TEXT_FONT_SIZES,
@@ -61,12 +64,36 @@ import {
 } from './types'
 import { useCanvasHistory } from './useCanvasHistory'
 
+const SWATCH_BTN_PX = 28
+const SWATCH_GAP_PX = 8
+const SWATCH_PANEL_PAD_PX = 10
+/** Inner height of the sticky-note swatch column (8 × 28px + gaps). */
+const STICKY_SWATCH_STACK_H =
+  NOTE_COLORS.length * SWATCH_BTN_PX +
+  (NOTE_COLORS.length - 1) * SWATCH_GAP_PX
+/** Outer height of side palettes matching the sticky stack. */
+const STICKY_SWATCH_PANEL_H =
+  SWATCH_PANEL_PAD_PX * 2 + STICKY_SWATCH_STACK_H
+
+function isLightPaletteSwatch(c: string) {
+  return c === '#FFFFFF' || c === '#F5F5F5' || c === '#D4D4D4'
+}
+
+/** Pencil popover: 7×3 grid for 21 Mural swatches, tight horizontal packing. */
+const PENCIL_PALETTE_COLS = 7
+const PENCIL_SWATCH_GAP_PX = 6
+const PENCIL_SWATCH_GRID_W =
+  PENCIL_PALETTE_COLS * SWATCH_BTN_PX +
+  (PENCIL_PALETTE_COLS - 1) * PENCIL_SWATCH_GAP_PX
+
 const SCALE_MIN = 0.1
 const SCALE_MAX = 4
 const ZOOM_STEP = 1.08
 /** Screen-space dot grid step (px). Fixed like FigJam so zoom doesn’t change dot density. */
 const SCREEN_DOT_GRID_STEP_PX = 24
-const NOTE_HEADER = 32
+/** Top padding for sticky body text (Mural-style single panel, no yellow strip). */
+const NOTE_TOP_PAD = 14
+const NOTE_SIDE_PAD = 12
 const MIN_ELEMENT_W = 80
 const MIN_ELEMENT_H = 40
 const MARQUEE_THRESHOLD = 5
@@ -324,7 +351,38 @@ function measureTextBlockHeight(
   return Math.max(MIN_ELEMENT_H, Math.ceil(innerH + TEXT_PAD_Y * 2))
 }
 
-type ActiveTool = 'select' | 'note' | 'task' | 'card' | 'text' | 'connect' | 'pencil'
+type ActiveTool =
+  | 'select'
+  | 'note'
+  | 'task'
+  | 'card'
+  | 'ellipse'
+  | 'triangle'
+  | 'diamond'
+  | 'text'
+  | 'connect'
+  | 'pencil'
+  | 'comment'
+
+function isShapePlacerTool(t: ActiveTool): boolean {
+  return (
+    t === 'card' ||
+    t === 'task' ||
+    t === 'ellipse' ||
+    t === 'triangle' ||
+    t === 'diamond'
+  )
+}
+
+function isGeometricShapeKind(kind: ElementKind): boolean {
+  return (
+    kind === 'card' ||
+    kind === 'ellipse' ||
+    kind === 'triangle' ||
+    kind === 'diamond'
+  )
+}
+
 type HandleId = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w'
 
 function clamp(n: number, min: number, max: number): number {
@@ -784,10 +842,15 @@ function CanvasElementNode({
     e.cancelBubble = true
   }
   if (display.kind === 'note') {
+    const nr = 6
+    const foldW = Math.min(18, Math.max(10, display.width * 0.09))
+    const foldH = Math.min(18, Math.max(10, display.height * 0.09))
+    const textBottomReserve = Math.max(NOTE_SIDE_PAD, foldH + 4)
     return (
       <Group
         x={display.x}
         y={display.y}
+        opacity={dimForFolderMergeHint ? 0.55 : 1}
         listening={canInteract}
         draggable={canInteract}
         onMouseDown={stopBubbleForItemDrag}
@@ -810,31 +873,52 @@ function CanvasElementNode({
       >
         <Rect
           width={display.width}
-          height={NOTE_HEADER}
-          fill="#fde047"
-          cornerRadius={[8, 8, 0, 0]}
-        />
-        <Rect
-          y={NOTE_HEADER}
-          width={display.width}
-          height={display.height - NOTE_HEADER}
+          height={display.height}
+          cornerRadius={nr}
           fill={display.color}
-          cornerRadius={[0, 0, 8, 8]}
-          shadowColor="#00000022"
-          shadowBlur={8}
-          shadowOffsetY={4}
+          stroke="rgba(0,0,0,0.07)"
+          strokeWidth={1}
+          shadowColor="rgba(0,0,0,0.14)"
+          shadowBlur={12}
+          shadowOffsetY={3}
           shadowEnabled
+        />
+        <Line
+          points={[
+            display.width - foldW,
+            display.height,
+            display.width,
+            display.height - foldH,
+            display.width,
+            display.height,
+          ]}
+          closed
+          fill="rgba(0,0,0,0.12)"
+          listening={false}
+        />
+        <Line
+          points={[
+            display.width - foldW,
+            display.height,
+            display.width,
+            display.height - foldH,
+          ]}
+          stroke="rgba(0,0,0,0.1)"
+          strokeWidth={1}
+          lineCap="round"
+          listening={false}
         />
         {!editing ? (
           <Text
-            x={12}
-            y={NOTE_HEADER + 12}
-            width={display.width - 24}
-            height={display.height - NOTE_HEADER - 24}
+            x={NOTE_SIDE_PAD}
+            y={NOTE_TOP_PAD}
+            width={display.width - NOTE_SIDE_PAD * 2}
+            height={display.height - NOTE_TOP_PAD - textBottomReserve}
             text={display.text}
             fontSize={13}
-            fill="#374151"
+            fill="#1e293b"
             wrap="word"
+            lineHeight={1.4}
             verticalAlign="top"
             listening={false}
           />
@@ -843,7 +927,7 @@ function CanvasElementNode({
           <Rect
             width={display.width}
             height={display.height}
-            cornerRadius={8}
+            cornerRadius={nr}
             stroke="#3b82f6"
             strokeWidth={2}
             listening={false}
@@ -896,6 +980,269 @@ function CanvasElementNode({
             y={0}
             width={display.width - 24}
             height={display.height}
+            text={display.text}
+            fontSize={13}
+            fill="#111827"
+            wrap="word"
+            verticalAlign="middle"
+            align="center"
+            listening={false}
+          />
+        ) : null}
+      </Group>
+    )
+  }
+
+  if (display.kind === 'comment') {
+    const pinCx = 16
+    const pinCy = display.height - 8
+    return (
+      <Group
+        x={display.x}
+        y={display.y}
+        opacity={dimForFolderMergeHint ? 0.55 : 1}
+        listening={canInteract}
+        draggable={canInteract}
+        onMouseDown={stopBubbleForItemDrag}
+        onClick={(e: Konva.KonvaEventObject<MouseEvent>) => {
+          if (e.evt.button !== 0) return
+          e.cancelBubble = true
+          onSelect(el.id, e.evt)
+        }}
+        onDragStart={() => onDragStart(el.id)}
+        onDragMove={(e: Konva.KonvaEventObject<DragEvent>) => {
+          onDragMove(el.id, e.target.x(), e.target.y())
+        }}
+        onDragEnd={(e: Konva.KonvaEventObject<DragEvent>) => {
+          onDragEnd(el.id, e.target.x(), e.target.y())
+        }}
+        onDblClick={(e: Konva.KonvaEventObject<MouseEvent>) => {
+          e.cancelBubble = true
+          onEditRequest(el)
+        }}
+      >
+        <Rect
+          width={display.width}
+          height={display.height}
+          fill={display.color}
+          cornerRadius={12}
+          stroke={selected ? '#3b82f6' : '#c4b5fd'}
+          strokeWidth={selected ? 2 : 1.5}
+          shadowColor="rgba(124, 58, 237, 0.14)"
+          shadowBlur={10}
+          shadowOffsetY={2}
+          shadowEnabled
+        />
+        <Line
+          points={[pinCx, pinCy, 28, 36]}
+          stroke="#7c3aed"
+          strokeWidth={2}
+          lineCap="round"
+          listening={false}
+        />
+        <Ellipse
+          x={pinCx}
+          y={pinCy}
+          radiusX={6}
+          radiusY={6}
+          fill="#7c3aed"
+          stroke="#5b21b6"
+          strokeWidth={1}
+          listening={false}
+        />
+        {!editing ? (
+          <Text
+            x={12}
+            y={10}
+            width={display.width - 24}
+            height={display.height - 22}
+            text={display.text}
+            fontSize={13}
+            fill="#4c1d95"
+            wrap="word"
+            verticalAlign="top"
+            listening={false}
+          />
+        ) : null}
+        {selected ? (
+          <Rect
+            width={display.width}
+            height={display.height}
+            cornerRadius={12}
+            stroke="#3b82f6"
+            strokeWidth={2}
+            listening={false}
+          />
+        ) : null}
+      </Group>
+    )
+  }
+
+  if (display.kind === 'ellipse') {
+    const w = display.width
+    const h = display.height
+    return (
+      <Group
+        x={display.x}
+        y={display.y}
+        listening={canInteract}
+        draggable={canInteract}
+        onMouseDown={stopBubbleForItemDrag}
+        onClick={(e: Konva.KonvaEventObject<MouseEvent>) => {
+          if (e.evt.button !== 0) return
+          e.cancelBubble = true
+          onSelect(el.id, e.evt)
+        }}
+        onDragStart={() => onDragStart(el.id)}
+        onDragMove={(e: Konva.KonvaEventObject<DragEvent>) => {
+          onDragMove(el.id, e.target.x(), e.target.y())
+        }}
+        onDragEnd={(e: Konva.KonvaEventObject<DragEvent>) => {
+          onDragEnd(el.id, e.target.x(), e.target.y())
+        }}
+        onDblClick={(e: Konva.KonvaEventObject<MouseEvent>) => {
+          e.cancelBubble = true
+          onEditRequest(el)
+        }}
+      >
+        <Rect width={w} height={h} fill="rgba(0,0,0,0.01)" listening />
+        <Ellipse
+          x={w / 2}
+          y={h / 2}
+          radiusX={w / 2}
+          radiusY={h / 2}
+          fill={display.color}
+          stroke={selected ? '#3b82f6' : 'rgba(0,0,0,0.1)'}
+          strokeWidth={selected ? 2 : 1}
+          shadowColor="#00000012"
+          shadowBlur={8}
+          shadowOffsetY={2}
+          shadowEnabled
+        />
+        {!editing ? (
+          <Text
+            x={12}
+            y={0}
+            width={w - 24}
+            height={h}
+            text={display.text}
+            fontSize={13}
+            fill="#111827"
+            wrap="word"
+            verticalAlign="middle"
+            align="center"
+            listening={false}
+          />
+        ) : null}
+      </Group>
+    )
+  }
+
+  if (display.kind === 'triangle') {
+    const w = display.width
+    const h = display.height
+    const pts = [w / 2, 0, w, h, 0, h]
+    return (
+      <Group
+        x={display.x}
+        y={display.y}
+        listening={canInteract}
+        draggable={canInteract}
+        onMouseDown={stopBubbleForItemDrag}
+        onClick={(e: Konva.KonvaEventObject<MouseEvent>) => {
+          if (e.evt.button !== 0) return
+          e.cancelBubble = true
+          onSelect(el.id, e.evt)
+        }}
+        onDragStart={() => onDragStart(el.id)}
+        onDragMove={(e: Konva.KonvaEventObject<DragEvent>) => {
+          onDragMove(el.id, e.target.x(), e.target.y())
+        }}
+        onDragEnd={(e: Konva.KonvaEventObject<DragEvent>) => {
+          onDragEnd(el.id, e.target.x(), e.target.y())
+        }}
+        onDblClick={(e: Konva.KonvaEventObject<MouseEvent>) => {
+          e.cancelBubble = true
+          onEditRequest(el)
+        }}
+      >
+        <Rect width={w} height={h} fill="rgba(0,0,0,0.01)" listening />
+        <Line
+          points={pts}
+          closed
+          fill={display.color}
+          stroke={selected ? '#3b82f6' : 'rgba(0,0,0,0.1)'}
+          strokeWidth={selected ? 2 : 1}
+          shadowColor="#00000012"
+          shadowBlur={8}
+          shadowOffsetY={2}
+          shadowEnabled
+        />
+        {!editing ? (
+          <Text
+            x={10}
+            y={h * 0.38}
+            width={w - 20}
+            height={h * 0.52}
+            text={display.text}
+            fontSize={13}
+            fill="#111827"
+            wrap="word"
+            verticalAlign="middle"
+            align="center"
+            listening={false}
+          />
+        ) : null}
+      </Group>
+    )
+  }
+
+  if (display.kind === 'diamond') {
+    const w = display.width
+    const h = display.height
+    const pts = [w / 2, 0, w, h / 2, w / 2, h, 0, h / 2]
+    return (
+      <Group
+        x={display.x}
+        y={display.y}
+        listening={canInteract}
+        draggable={canInteract}
+        onMouseDown={stopBubbleForItemDrag}
+        onClick={(e: Konva.KonvaEventObject<MouseEvent>) => {
+          if (e.evt.button !== 0) return
+          e.cancelBubble = true
+          onSelect(el.id, e.evt)
+        }}
+        onDragStart={() => onDragStart(el.id)}
+        onDragMove={(e: Konva.KonvaEventObject<DragEvent>) => {
+          onDragMove(el.id, e.target.x(), e.target.y())
+        }}
+        onDragEnd={(e: Konva.KonvaEventObject<DragEvent>) => {
+          onDragEnd(el.id, e.target.x(), e.target.y())
+        }}
+        onDblClick={(e: Konva.KonvaEventObject<MouseEvent>) => {
+          e.cancelBubble = true
+          onEditRequest(el)
+        }}
+      >
+        <Rect width={w} height={h} fill="rgba(0,0,0,0.01)" listening />
+        <Line
+          points={pts}
+          closed
+          fill={display.color}
+          stroke={selected ? '#3b82f6' : 'rgba(0,0,0,0.1)'}
+          strokeWidth={selected ? 2 : 1}
+          shadowColor="#00000012"
+          shadowBlur={8}
+          shadowOffsetY={2}
+          shadowEnabled
+        />
+        {!editing ? (
+          <Text
+            x={10}
+            y={h * 0.25}
+            width={w - 20}
+            height={h * 0.5}
             text={display.text}
             fontSize={13}
             fill="#111827"
@@ -1309,7 +1656,84 @@ function ResizeHandlesLayer({
   )
 }
 
-/** Left tool rail: larger hit targets (~FigJam / 44px+ touch). */
+/** FigJam-style sticky toolbar icon (amber header strip + cream body). */
+function IconFigjamSticky({ size }: { size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden>
+      <rect
+        x="4.5"
+        y="5"
+        width="15"
+        height="14"
+        rx="2.5"
+        fill="#FEF9C7"
+        stroke="#CA8A04"
+        strokeWidth="1.15"
+      />
+      <rect x="4.5" y="5" width="15" height="5.5" rx="2.5" fill="#FDE047" />
+    </svg>
+  )
+}
+
+/** FigJam-style comment: bubble + tail + avatar dot. */
+function IconFigjamComment({ size }: { size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden>
+      <path
+        d="M6.5 6.5h11a2.5 2.5 0 0 1 2.5 2.5v6.5a2.5 2.5 0 0 1-2.5 2.5h-3.2l-3.4 3.85a.55.55 0 0 1-.95-.39V18H6.5A2.5 2.5 0 0 1 4 15.5V9A2.5 2.5 0 0 1 6.5 6.5z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinejoin="round"
+      />
+      <circle cx="9" cy="12" r="1.15" fill="currentColor" />
+      <circle cx="12" cy="12" r="1.15" fill="currentColor" />
+      <circle cx="15" cy="12" r="1.15" fill="currentColor" />
+      <circle cx="18" cy="7" r="2.25" fill="#A78BFA" stroke="currentColor" strokeWidth="1" />
+    </svg>
+  )
+}
+
+/** Present / focus canvas (screen + stand). */
+function IconPresenting({ size }: { size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden>
+      <path
+        d="M4 16h16"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+      />
+      <path
+        d="M8 16V18h8v-2"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinejoin="round"
+      />
+      <rect
+        x="5"
+        y="5"
+        width="14"
+        height="9"
+        rx="1.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.75"
+      />
+      <path
+        d="M12 14v2"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+      />
+    </svg>
+  )
+}
+
+/** Left tool rail: larger hit targets (~44px+ touch). */
 const SIDENAV_BTN_PX = 48
 const SIDENAV_ICON_PX = 24
 
@@ -1327,10 +1751,10 @@ const leftToolbarStyle: CSSProperties = {
   backgroundColor: '#ffffff',
   backgroundImage: 'none',
   borderRadius: 14,
-  border: '1px solid #e5e7eb',
-  boxShadow: '0 2px 12px rgba(0,0,0,0.08)',
+  border: '1px solid rgba(0,0,0,0.07)',
+  boxShadow: '0 2px 16px rgba(0,0,0,0.07)',
   pointerEvents: 'auto',
-  overflow: 'hidden',
+  overflow: 'visible',
 }
 
 const toolBtnBase: CSSProperties = {
@@ -1418,6 +1842,25 @@ const zoomPercentStyle: CSSProperties = {
   justifyContent: 'center',
 }
 
+/** Top-right under header: same inset as bottom-right zoom cluster (`right: 16`). */
+const canvasTopRightToolStyle: CSSProperties = {
+  position: 'fixed',
+  top: 48,
+  right: 16,
+  zIndex: 1250,
+  display: 'flex',
+  alignItems: 'center',
+  gap: 10,
+  pointerEvents: 'none',
+}
+
+const chromePresentingDimStyle: CSSProperties = {
+  opacity: 0.22,
+  filter: 'blur(9px)',
+  pointerEvents: 'none',
+  transition: 'opacity 0.28s ease, filter 0.28s ease',
+}
+
 const swatchPanelStyle: CSSProperties = {
   position: 'fixed',
   /* 16 (dock left) + 10 pad + btn + 10 pad + gap */
@@ -1427,22 +1870,66 @@ const swatchPanelStyle: CSSProperties = {
   zIndex: 1100,
   display: 'flex',
   flexDirection: 'column',
-  gap: 8,
-  padding: 10,
-  background: '#ffffff',
+  gap: SWATCH_GAP_PX,
+  padding: SWATCH_PANEL_PAD_PX,
+  boxSizing: 'border-box',
+  background: 'rgba(250,250,250,0.96)',
   borderRadius: 12,
-  border: '1px solid #e5e7eb',
-  boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
+  border: '1px solid rgba(0,0,0,0.06)',
+  boxShadow: '0 4px 20px rgba(0,0,0,0.08)',
+  backdropFilter: 'blur(10px)',
+  WebkitBackdropFilter: 'blur(10px)',
   pointerEvents: 'auto',
 }
 
+/** Under the left rail (z 1100) so the shapes flyout and tool buttons stay clickable. */
+const pencilOptionsPanelStyle: CSSProperties = {
+  ...swatchPanelStyle,
+  zIndex: 1040,
+}
+
 const swatchBtn: CSSProperties = {
-  width: 28,
-  height: 28,
-  borderRadius: 6,
-  border: '1px solid rgba(0,0,0,0.12)',
+  width: SWATCH_BTN_PX,
+  height: SWATCH_BTN_PX,
+  borderRadius: 8,
+  border: '1px solid rgba(0,0,0,0.08)',
   cursor: 'pointer',
   padding: 0,
+  flexShrink: 0,
+}
+
+const shapesFlyoutStyle: CSSProperties = {
+  position: 'absolute',
+  left: 'calc(100% + 10px)',
+  top: '50%',
+  transform: 'translateY(-50%)',
+  minWidth: 188,
+  padding: 6,
+  background: 'rgba(255,255,255,0.98)',
+  borderRadius: 12,
+  border: '1px solid rgba(0,0,0,0.07)',
+  boxShadow: '0 8px 28px rgba(0,0,0,0.12)',
+  backdropFilter: 'blur(12px)',
+  WebkitBackdropFilter: 'blur(12px)',
+  zIndex: 5,
+  pointerEvents: 'auto',
+}
+
+const shapesFlyoutItemStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 10,
+  width: '100%',
+  padding: '10px 12px',
+  border: 'none',
+  borderRadius: 8,
+  background: 'transparent',
+  cursor: 'pointer',
+  textAlign: 'left',
+  fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+  fontSize: 13,
+  fontWeight: 500,
+  color: '#1e293b',
 }
 
 function IconFigjamBold() {
@@ -1568,7 +2055,15 @@ function IconConnect() {
   )
 }
 
-export function Canvas({ initialState }: { initialState: CanvasState }) {
+export function Canvas({
+  initialState,
+  presenting = false,
+  onPresentingChange,
+}: {
+  initialState: CanvasState
+  presenting?: boolean
+  onPresentingChange?: (next: boolean) => void
+}) {
   const { state, commit, undo, redo } = useCanvasHistory(initialState)
   const stateRef = useRef(state)
 
@@ -1583,6 +2078,12 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
   )
   const [infoModalOpen, setInfoModalOpen] = useState(false)
   const [activeTool, setActiveTool] = useState<ActiveTool>('select')
+  const [shapesMenuOpen, setShapesMenuOpen] = useState(false)
+  const shapesMenuOpenRef = useRef(false)
+  useLayoutEffect(() => {
+    shapesMenuOpenRef.current = shapesMenuOpen
+  }, [shapesMenuOpen])
+  const shapesMenuRef = useRef<HTMLDivElement>(null)
   const [connectorDraft, setConnectorDraft] = useState<{
     fromId: string
     fromAnchor: Anchor
@@ -1624,7 +2125,7 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
     Record<string, { x: number; y: number }> | null
   >(null)
 
-  const [pencilColor, setPencilColor] = useState<string>(TEXT_COLORS[7])
+  const [pencilColor, setPencilColor] = useState<string>(MURAL_TEXT_PALETTE[1])
   const [pencilSize, setPencilSize] = useState(4)
   const [pencilDraft, setPencilDraft] = useState<CanvasElement | null>(null)
   const pencilDraftRef = useRef<CanvasElement | null>(null)
@@ -1632,6 +2133,9 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
   const [hoverElement, setHoverElement] = useState(false)
   const [hoveredElementId, setHoveredElementId] = useState<string | null>(null)
   const [hoveredAnchorKey, setHoveredAnchorKey] = useState<string | null>(null)
+  const [commentHintHover, setCommentHintHover] = useState(false)
+  const [commentHintPinned, setCommentHintPinned] = useState(false)
+  const commentHintVisible = commentHintHover || commentHintPinned
 
   const effectiveSelectedIds = useMemo(() => {
     const set = new Set(state.elements.map((e) => e.id))
@@ -1643,12 +2147,40 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
     effectiveSelectedIdsRef.current = effectiveSelectedIds
   }, [effectiveSelectedIds])
 
+  useEffect(() => {
+    if (!isShapePlacerTool(activeTool)) setShapesMenuOpen(false)
+  }, [activeTool])
+
+  useEffect(() => {
+    if (!shapesMenuOpen) return
+    const onDown = (e: MouseEvent) => {
+      const root = shapesMenuRef.current
+      if (root && !root.contains(e.target as Node)) setShapesMenuOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [shapesMenuOpen])
+
+  useEffect(() => {
+    if (!presenting) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onPresentingChange?.(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [presenting, onPresentingChange])
+
   const panning = useRef(false)
   const panOrigin = useRef({ cx: 0, cy: 0, vx: 0, vy: 0 })
   const viewportUiRef = useRef({ x: 0, y: 0, scale: 1 })
   const resizePreviewRef = useRef<CanvasElement | null>(null)
   const spaceDown = useRef(false)
+  const shiftDown = useRef(false)
   const [handMode, setHandMode] = useState(false)
+  const clipboardRef = useRef<{
+    elements: CanvasElement[]
+    connectors: CanvasState['connectors']
+  } | null>(null)
 
   const [folderNaming, setFolderNaming] = useState<{
     draggedId: string
@@ -2208,6 +2740,9 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
 
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
+      if (e.key === 'Shift') {
+        shiftDown.current = true
+      }
       if (e.code === 'Space') {
         if (isSpaceReservedForTyping(e.target)) return
         const sel = effectiveSelectedIdsRef.current
@@ -2232,6 +2767,10 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
         else undo()
       }
       if (e.key === 'Escape') {
+        if (shapesMenuOpenRef.current) {
+          setShapesMenuOpen(false)
+          return
+        }
         if (folderViewerIdRef.current) {
           closeFolderViewer()
           return
@@ -2262,10 +2801,14 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
         spaceDown.current = false
         flushSync(() => setHandMode(false))
       }
+      if (e.key === 'Shift') {
+        shiftDown.current = false
+      }
     }
     const onWinBlur = () => {
       spaceDown.current = false
       flushSync(() => setHandMode(false))
+      shiftDown.current = false
     }
     window.addEventListener('keydown', down)
     window.addEventListener('keyup', up)
@@ -2320,6 +2863,85 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [commit, selectedConnectorId])
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (isSpaceReservedForTyping(e.target)) return
+      const active = document.activeElement
+      if (
+        active instanceof HTMLElement &&
+        (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')
+      ) {
+        return
+      }
+      const mod = e.metaKey || e.ctrlKey
+      if (!mod) return
+
+      if (e.key === 'c' || e.key === 'C') {
+        const ids = effectiveSelectedIdsRef.current
+        if (ids.length === 0) return
+        e.preventDefault()
+        const idSet = new Set(ids)
+        const snapshot = stateRef.current
+        const elements = snapshot.elements.filter((el) => idSet.has(el.id))
+        const connectors = snapshot.connectors.filter(
+          (c) => idSet.has(c.fromId) || idSet.has(c.toId),
+        )
+        clipboardRef.current = {
+          elements: elements.map((el) => ({ ...el })),
+          connectors: connectors.map((c) => ({ ...c })),
+        }
+        return
+      }
+
+      if (e.key === 'v' || e.key === 'V') {
+        const data = clipboardRef.current
+        if (!data) return
+        e.preventDefault()
+        const OFFSET_X = 32
+        const OFFSET_Y = 32
+
+        const newIds: string[] = []
+        commit((d) => {
+          const idMap = new Map<string, string>()
+          const clonedElements: CanvasElement[] = []
+          for (const el of data.elements) {
+            const id = crypto.randomUUID()
+            idMap.set(el.id, id)
+            const { parentFolderId: _omit, ...rest } = el
+            const cloned: CanvasElement = {
+              ...rest,
+              id,
+              x: el.x + OFFSET_X,
+              y: el.y + OFFSET_Y,
+            }
+            clonedElements.push(cloned)
+          }
+          if (clonedElements.length === 0) return
+          d.elements.push(...clonedElements)
+          for (const el of clonedElements) newIds.push(el.id)
+
+          for (const c of data.connectors) {
+            const fromId = idMap.get(c.fromId)
+            const toId = idMap.get(c.toId)
+            if (!fromId || !toId) continue
+            d.connectors.push({
+              ...c,
+              id: crypto.randomUUID(),
+              fromId,
+              toId,
+            })
+          }
+        })
+        if (newIds.length > 0) {
+          setSelectedConnectorId(null)
+          setSelectedIds(newIds)
+        }
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [commit])
 
   const zoomFromCenter = useCallback(
     (factor: number) => {
@@ -2411,14 +3033,14 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
       if (activeTool === 'pencil') return
       const w = worldFromPointer(stage, viewportMemo)
       if (!w) return
-      const tool = activeTool
+      const tool = activeTool as ElementKind
       const next = createElement(tool, w.wx, w.wy)
       commit((d) => {
         d.elements.push(next)
       })
       setActiveTool('select')
       setSelectedIds([next.id])
-      if (tool === 'text') {
+      if (tool === 'text' || tool === 'comment') {
         setEditing(next)
         setEditText('')
       }
@@ -2595,7 +3217,9 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
     useState<TextFontStyleKonva>('normal')
   const [editTextAlign, setEditTextAlign] =
     useState<TextAlignKonva>('left')
-  const [editTextColor, setEditTextColor] = useState<string>(TEXT_COLORS[7])
+  const [editTextColor, setEditTextColor] = useState<string>(
+    MURAL_TEXT_PALETTE[1],
+  )
   const [editLayout, setEditLayout] = useState<{
     left: number
     top: number
@@ -2713,11 +3337,16 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
     if (!editing) return {}
     if (editing.kind === 'note') {
       return {
-        padding: '12px',
-        paddingTop: NOTE_HEADER + 12,
+        padding: `${NOTE_TOP_PAD}px ${NOTE_SIDE_PAD}px`,
       }
     }
-    if (editing.kind === 'card') {
+    if (
+      editing.kind === 'card' ||
+      editing.kind === 'comment' ||
+      editing.kind === 'ellipse' ||
+      editing.kind === 'triangle' ||
+      editing.kind === 'diamond'
+    ) {
       return { padding: '12px' }
     }
     if (editing.kind === 'text') {
@@ -2907,10 +3536,54 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
     const sess = resizeSession.current
     if (!sess) return
     const next = applyResize(sess.orig, handle, wx, wy)
-    const full: CanvasElement = {
+    let full: CanvasElement = {
       ...sess.orig,
       ...next,
     }
+
+    if (
+      shiftDown.current &&
+      isGeometricShapeKind(sess.orig.kind) &&
+      (handle === 'nw' || handle === 'ne' || handle === 'se' || handle === 'sw')
+    ) {
+      const { x: ox, y: oy, width: ow, height: oh } = sess.orig
+      if (ow > 0 && oh > 0) {
+        const right = ox + ow
+        const bottom = oy + oh
+        const scaleX = full.width / ow
+        const scaleY = full.height / oh
+        const scale = Math.max(
+          Math.min(scaleX, scaleY),
+          MIN_ELEMENT_W / ow,
+          MIN_ELEMENT_H / oh,
+        )
+        const nw = ow * scale
+        const nh = oh * scale
+        let nx = ox
+        let ny = oy
+        if (handle === 'se') {
+          nx = ox
+          ny = oy
+        } else if (handle === 'ne') {
+          nx = ox
+          ny = bottom - nh
+        } else if (handle === 'sw') {
+          nx = right - nw
+          ny = oy
+        } else if (handle === 'nw') {
+          nx = right - nw
+          ny = bottom - nh
+        }
+        full = {
+          ...full,
+          x: nx,
+          y: ny,
+          width: nw,
+          height: nh,
+        }
+      }
+    }
+
     setResizePreview(full)
   }
 
@@ -2959,13 +3632,17 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
   const palette =
     firstSelectedKind === 'note'
       ? NOTE_COLORS
-      : firstSelectedKind === 'card'
-        ? CARD_COLORS
-        : firstSelectedKind === 'task'
-          ? TASK_ACCENT_COLORS
-          : firstSelectedKind === 'text' || firstSelectedKind === 'pencil'
-            ? TEXT_COLORS
-            : []
+      : firstSelectedKind === 'task'
+        ? TASK_ACCENT_COLORS
+        : firstSelectedKind === 'card' ||
+            firstSelectedKind === 'comment' ||
+            firstSelectedKind === 'ellipse' ||
+            firstSelectedKind === 'triangle' ||
+            firstSelectedKind === 'diamond' ||
+            firstSelectedKind === 'text' ||
+            firstSelectedKind === 'pencil'
+          ? [...MURAL_TEXT_PALETTE]
+          : []
 
   const [boardDropMessage, setBoardDropMessage] = useState<string | null>(null)
   const boardDropMsgTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
@@ -3729,6 +4406,31 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
 
   return (
     <>
+      {onPresentingChange ? (
+        <div style={canvasTopRightToolStyle}>
+          <div style={{ ...infoCtaBarStyle, pointerEvents: 'auto' }}>
+            <button
+              type="button"
+              title={presenting ? 'Exit presenting' : 'Presenting'}
+              aria-pressed={presenting}
+              style={zoomBtnStyle}
+              onClick={() => onPresentingChange(!presenting)}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = '#f3f4f6'
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = 'transparent'
+              }}
+            >
+              {presenting ? (
+                <X size={18} strokeWidth={2} aria-hidden />
+              ) : (
+                <IconPresenting size={18} />
+              )}
+            </button>
+          </div>
+        </div>
+      ) : null}
     <div
       ref={wrapRef}
       className="folium-board-bg"
@@ -3929,8 +4631,12 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
           editing === null &&
           activeTool !== 'note' &&
           activeTool !== 'card' &&
+          activeTool !== 'ellipse' &&
+          activeTool !== 'triangle' &&
+          activeTool !== 'diamond' &&
           activeTool !== 'task' &&
           activeTool !== 'text' &&
+          activeTool !== 'comment' &&
           draggingElementId === null
 
         if (!canShow) return null
@@ -4187,46 +4893,56 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
                   left: 0,
                   zIndex: 1300,
                   display: 'flex',
+                  flexDirection: 'column',
                   flexWrap: 'wrap',
-                  gap: 8,
-                  padding: 10,
-                  width: 168,
+                  alignContent: 'flex-start',
+                  gap: SWATCH_GAP_PX,
+                  height: STICKY_SWATCH_PANEL_H,
                   boxSizing: 'border-box',
-                  background: '#1a1a1a',
-                  borderRadius: 10,
-                  border: '1px solid rgba(255,255,255,0.12)',
-                  boxShadow: '0 8px 24px rgba(0,0,0,0.35)',
+                  padding: SWATCH_PANEL_PAD_PX,
+                  width: 'max-content',
+                  maxWidth: 'min(360px, calc(100vw - 48px))',
+                  background: '#2a2a2a',
+                  borderRadius: 12,
+                  border: '1px solid rgba(255,255,255,0.1)',
+                  boxShadow: '0 10px 28px rgba(0,0,0,0.45)',
                 }}
               >
-                {TEXT_COLORS.map((c) => (
-                  <button
-                    key={c}
-                    type="button"
-                    role="option"
-                    aria-selected={editTextColor === c}
-                    title={c}
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => {
-                      setEditTextColor(c)
-                      setEditLayoutTick((n) => n + 1)
-                      setTextColorMenuOpen(false)
-                    }}
-                    style={{
-                      width: 30,
-                      height: 30,
-                      padding: 0,
-                      border:
-                        editTextColor === c
-                          ? '2px solid #fafafa'
-                          : '2px solid transparent',
-                      borderRadius: '50%',
-                      background: c,
-                      cursor: 'pointer',
-                      boxSizing: 'border-box',
-                      boxShadow: 'inset 0 0 0 1px rgba(0,0,0,0.15)',
-                    }}
-                  />
-                ))}
+                {MURAL_TEXT_PALETTE.map((c) => {
+                  const light = isLightPaletteSwatch(c)
+                  const selected = editTextColor === c
+                  return (
+                    <button
+                      key={c}
+                      type="button"
+                      role="option"
+                      aria-selected={selected}
+                      title={c}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => {
+                        setEditTextColor(c)
+                        setEditLayoutTick((n) => n + 1)
+                        setTextColorMenuOpen(false)
+                      }}
+                      style={{
+                        width: SWATCH_BTN_PX,
+                        height: SWATCH_BTN_PX,
+                        padding: 0,
+                        border: 'none',
+                        borderRadius: 8,
+                        background: c,
+                        cursor: 'pointer',
+                        boxSizing: 'border-box',
+                        flexShrink: 0,
+                        boxShadow: selected
+                          ? '0 0 0 2px #fafafa, 0 0 0 4px #3b82f6'
+                          : light
+                            ? 'inset 0 0 0 1px rgba(0,0,0,0.28)'
+                            : 'inset 0 0 0 1px rgba(0,0,0,0.12)',
+                      }}
+                    />
+                  )
+                })}
               </div>
             ) : null}
           </div>
@@ -4521,7 +5237,12 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
             resize: 'none',
             fontSize:
               editing?.kind === 'text' ? editFontSize : 13,
-            lineHeight: editing?.kind === 'text' ? TEXT_LINE_HEIGHT : 1.45,
+          lineHeight:
+            editing?.kind === 'text'
+              ? TEXT_LINE_HEIGHT
+              : editing?.kind === 'note'
+                ? 1.4
+                : 1.45,
             fontFamily:
               editing?.kind === 'text'
                 ? editFontFamily
@@ -4574,7 +5295,12 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
         />
       ) : null}
 
-      <div style={leftToolbarStyle}>
+      <div
+        style={{
+          ...leftToolbarStyle,
+          ...(presenting ? chromePresentingDimStyle : {}),
+        }}
+      >
         <button
           type="button"
           title="Select"
@@ -4637,48 +5363,166 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
           }}
           onClick={() => setActiveTool('note')}
         >
-          <StickyNote size={SIDENAV_ICON_PX} strokeWidth={1.75} aria-hidden />
+          <IconFigjamSticky size={SIDENAV_ICON_PX} />
         </button>
-        <button
-          type="button"
-          title="Card"
-          style={{
-            ...toolBtnBase,
-            background: activeTool === 'card' ? '#eff6ff' : 'transparent',
-            color: activeTool === 'card' ? '#3b82f6' : '#374151',
-          }}
-          onMouseEnter={(e) => {
-            if (activeTool !== 'card')
-              e.currentTarget.style.background = '#f3f4f6'
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background =
-              activeTool === 'card' ? '#eff6ff' : 'transparent'
-          }}
-          onClick={() => setActiveTool('card')}
-        >
-          <Square size={SIDENAV_ICON_PX} strokeWidth={1.75} aria-hidden />
-        </button>
-        <button
-          type="button"
-          title="Task"
-          style={{
-            ...toolBtnBase,
-            background: activeTool === 'task' ? '#eff6ff' : 'transparent',
-            color: activeTool === 'task' ? '#3b82f6' : '#374151',
-          }}
-          onMouseEnter={(e) => {
-            if (activeTool !== 'task')
-              e.currentTarget.style.background = '#f3f4f6'
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background =
-              activeTool === 'task' ? '#eff6ff' : 'transparent'
-          }}
-          onClick={() => setActiveTool('task')}
-        >
-          <ListChecks size={SIDENAV_ICON_PX} strokeWidth={1.75} aria-hidden />
-        </button>
+        <div ref={shapesMenuRef} style={{ position: 'relative', flexShrink: 0 }}>
+          <button
+            type="button"
+            title="Shapes & connectors"
+            aria-expanded={shapesMenuOpen}
+            aria-haspopup="menu"
+            style={{
+              ...toolBtnBase,
+              background:
+                isShapePlacerTool(activeTool) || shapesMenuOpen
+                  ? '#eff6ff'
+                  : 'transparent',
+              color:
+                isShapePlacerTool(activeTool) || shapesMenuOpen
+                  ? '#3b82f6'
+                  : '#374151',
+            }}
+            onMouseEnter={(e) => {
+              if (!shapesMenuOpen && !isShapePlacerTool(activeTool))
+                e.currentTarget.style.background = '#f3f4f6'
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background =
+                isShapePlacerTool(activeTool) || shapesMenuOpen
+                  ? '#eff6ff'
+                  : 'transparent'
+            }}
+            onClick={() => {
+              if (!shapesMenuOpen && activeTool === 'pencil') setActiveTool('select')
+              setShapesMenuOpen((o) => !o)
+            }}
+          >
+            <Shapes size={SIDENAV_ICON_PX} strokeWidth={1.65} aria-hidden />
+          </button>
+          {shapesMenuOpen ? (
+            <div role="menu" aria-label="Shapes and connectors" style={shapesFlyoutStyle}>
+              <button
+                type="button"
+                role="menuitem"
+                style={shapesFlyoutItemStyle}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = '#f1f5f9'
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = 'transparent'
+                }}
+                onClick={() => {
+                  setActiveTool('card')
+                  setShapesMenuOpen(false)
+                }}
+              >
+                <Square size={18} strokeWidth={1.7} aria-hidden />
+                <span>Rectangle</span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                style={shapesFlyoutItemStyle}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = '#f1f5f9'
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = 'transparent'
+                }}
+                onClick={() => {
+                  setActiveTool('ellipse')
+                  setShapesMenuOpen(false)
+                }}
+              >
+                <Circle size={18} strokeWidth={1.7} aria-hidden />
+                <span>Ellipse</span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                style={shapesFlyoutItemStyle}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = '#f1f5f9'
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = 'transparent'
+                }}
+                onClick={() => {
+                  setActiveTool('triangle')
+                  setShapesMenuOpen(false)
+                }}
+              >
+                <Triangle size={18} strokeWidth={1.7} aria-hidden />
+                <span>Triangle</span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                style={shapesFlyoutItemStyle}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = '#f1f5f9'
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = 'transparent'
+                }}
+                onClick={() => {
+                  setActiveTool('diamond')
+                  setShapesMenuOpen(false)
+                }}
+              >
+                <Diamond size={18} strokeWidth={1.7} aria-hidden />
+                <span>Diamond</span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                style={shapesFlyoutItemStyle}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = '#f1f5f9'
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = 'transparent'
+                }}
+                onClick={() => {
+                  setActiveTool('task')
+                  setShapesMenuOpen(false)
+                }}
+              >
+                <ListChecks size={18} strokeWidth={1.7} aria-hidden />
+                <span>Checklist</span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                style={shapesFlyoutItemStyle}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = '#f1f5f9'
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = 'transparent'
+                }}
+                onClick={() => {
+                  setActiveTool('connect')
+                  setShapesMenuOpen(false)
+                }}
+              >
+                <span
+                  style={{
+                    width: 18,
+                    height: 18,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0,
+                  }}
+                >
+                  <IconConnect />
+                </span>
+                <span>Connector</span>
+              </button>
+            </div>
+          ) : null}
+        </div>
         <button
           type="button"
           title="Pencil"
@@ -4695,58 +5539,83 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
             e.currentTarget.style.background =
               activeTool === 'pencil' ? '#eff6ff' : 'transparent'
           }}
-          onClick={() => setActiveTool('pencil')}
+          onClick={() => {
+            setShapesMenuOpen(false)
+            setActiveTool('pencil')
+          }}
         >
           <Pencil size={SIDENAV_ICON_PX} strokeWidth={1.75} aria-hidden />
         </button>
-        <button
-          type="button"
-          title="Connect"
-          style={{
-            ...toolBtnBase,
-            background: activeTool === 'connect' ? '#eff6ff' : 'transparent',
-            color: activeTool === 'connect' ? '#3b82f6' : '#374151',
-          }}
-          onMouseEnter={(e) => {
-            if (activeTool !== 'connect')
-              e.currentTarget.style.background = '#f3f4f6'
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background =
-              activeTool === 'connect' ? '#eff6ff' : 'transparent'
-          }}
-          onClick={() => setActiveTool('connect')}
-        >
-          <IconConnect />
-        </button>
-      </div>
-
-      {palette.length > 0 && effectiveSelectedIds.length > 0 ? (
-        <div style={swatchPanelStyle}>
-          {palette.map((c) => (
-            <button
-              key={c}
-              type="button"
-              title={c}
-              style={{ ...swatchBtn, background: c }}
-              onClick={() => applyColorsToSelection(c)}
-            />
-          ))}
-        </div>
-      ) : null}
-
-      {activeTool === 'pencil' ? (
-        <div style={{ ...swatchPanelStyle, gap: 10, padding: '10px 12px' }}>
-          <div
+        <div style={{ position: 'relative' }}>
+          <button
+            type="button"
+            aria-disabled="true"
+            aria-label="Comments, coming soon"
             style={{
-              display: 'flex',
-              flexWrap: 'wrap',
-              gap: 8,
-              alignItems: 'center',
-              maxWidth: 220,
+              ...toolBtnBase,
+              opacity: 0.4,
+              cursor: 'default',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = '#f3f4f6'
+              setCommentHintHover(true)
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = 'transparent'
+              setCommentHintHover(false)
+            }}
+            onClick={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              setCommentHintPinned((p) => !p)
             }}
           >
-            {TEXT_COLORS.map((c) => (
+            <IconFigjamComment size={SIDENAV_ICON_PX} />
+          </button>
+          <div
+            aria-hidden
+            style={{
+              position: 'absolute',
+              left: SIDENAV_BTN_PX + 12,
+              top: '50%',
+              transform: 'translateY(-50%)',
+              whiteSpace: 'nowrap',
+              fontSize: 11,
+              padding: '6px 10px',
+              borderRadius: 8,
+              background: 'rgba(15,23,42,0.96)',
+              color: '#e5e7eb',
+              boxShadow: '0 4px 10px rgba(15,23,42,0.45)',
+              pointerEvents: 'none',
+              opacity: commentHintVisible ? 1 : 0,
+              transition: 'opacity 120ms ease-out',
+            }}
+          >
+            Comments · coming soon
+          </div>
+        </div>
+      </div>
+
+      {palette.length > 0 &&
+      effectiveSelectedIds.length > 0 &&
+      activeTool !== 'pencil' ? (
+        <div
+          style={{
+            ...swatchPanelStyle,
+            ...(presenting ? chromePresentingDimStyle : {}),
+            ...(palette.length > NOTE_COLORS.length
+              ? {
+                  height: STICKY_SWATCH_PANEL_H,
+                  flexDirection: 'column',
+                  flexWrap: 'wrap',
+                  alignContent: 'flex-start',
+                }
+              : {}),
+          }}
+        >
+          {palette.map((c) => {
+            const light = isLightPaletteSwatch(c)
+            return (
               <button
                 key={c}
                 type="button"
@@ -4754,16 +5623,79 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
                 style={{
                   ...swatchBtn,
                   background: c,
-                  boxShadow:
-                    pencilColor === c
-                      ? '0 0 0 2px rgba(59,130,246,0.85)'
-                      : swatchBtn.boxShadow,
+                  boxShadow: light
+                    ? 'inset 0 0 0 1px rgba(0,0,0,0.18)'
+                    : swatchBtn.boxShadow,
                 }}
-                onClick={() => setPencilColor(c)}
+                onClick={() => applyColorsToSelection(c)}
               />
-            ))}
+            )
+          })}
+        </div>
+      ) : null}
+
+      {activeTool === 'pencil' ? (
+        <div
+          style={{
+            ...pencilOptionsPanelStyle,
+            ...(presenting ? chromePresentingDimStyle : {}),
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'stretch',
+            gap: 8,
+            padding: `${SWATCH_PANEL_PAD_PX}px 12px`,
+            width: PENCIL_SWATCH_GRID_W + 24,
+            boxSizing: 'border-box',
+          }}
+        >
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'row',
+              flexWrap: 'wrap',
+              justifyContent: 'flex-start',
+              alignContent: 'flex-start',
+              gap: PENCIL_SWATCH_GAP_PX,
+              width: PENCIL_SWATCH_GRID_W,
+              boxSizing: 'border-box',
+            }}
+          >
+            {MURAL_TEXT_PALETTE.map((c) => {
+              const light = isLightPaletteSwatch(c)
+              const selected = pencilColor === c
+              return (
+                <button
+                  key={c}
+                  type="button"
+                  title={c}
+                  style={{
+                    ...swatchBtn,
+                    background: c,
+                    boxShadow: selected
+                      ? '0 0 0 2px rgba(59,130,246,0.85)'
+                      : light
+                        ? 'inset 0 0 0 1px rgba(0,0,0,0.18)'
+                        : swatchBtn.boxShadow,
+                  }}
+                  onClick={() => setPencilColor(c)}
+                />
+              )
+            })}
           </div>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <div
+            role="group"
+            aria-label="Stroke width"
+            style={{
+              display: 'flex',
+              flexDirection: 'row',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              gap: 6,
+              paddingTop: 4,
+              marginTop: 2,
+              borderTop: '1px solid rgba(0,0,0,0.06)',
+            }}
+          >
             {[2, 4, 8, 12].map((s) => (
               <button
                 key={s}
@@ -4771,14 +5703,16 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
                 title={`Size ${s}`}
                 onClick={() => setPencilSize(s)}
                 style={{
-                  width: 34,
-                  height: 34,
-                  borderRadius: 10,
+                  flex: '1 1 0',
+                  minWidth: 0,
+                  height: 32,
+                  borderRadius: 8,
                   border: '1px solid rgba(0,0,0,0.08)',
                   background: pencilSize === s ? '#eff6ff' : '#ffffff',
                   display: 'grid',
                   placeItems: 'center',
                   cursor: 'pointer',
+                  padding: 0,
                 }}
               >
                 <span
@@ -4796,7 +5730,12 @@ export function Canvas({ initialState }: { initialState: CanvasState }) {
         </div>
       ) : null}
 
-      <div style={canvasBottomRightClusterStyle}>
+      <div
+        style={{
+          ...canvasBottomRightClusterStyle,
+          ...(presenting ? chromePresentingDimStyle : {}),
+        }}
+      >
         <div style={zoomBarStyle}>
           <button
             type="button"

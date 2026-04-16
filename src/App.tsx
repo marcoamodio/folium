@@ -15,6 +15,7 @@ type BootState =
 
 function AppDesktop() {
   const [boot, setBoot] = useState<BootState>({ status: 'loading' })
+  const [presenting, setPresenting] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -50,15 +51,22 @@ function AppDesktop() {
 
   return (
     <SaveStatusProvider>
-      <FoliumTopBar />
+      <FoliumTopBar presenting={presenting} />
       {boot.status === 'loading' ? (
         <div className="folium-boot" aria-hidden />
       ) : (
         <div className="folium-canvas">
-          <Canvas initialState={boot.canvasState} />
+          <Canvas
+            initialState={boot.canvasState}
+            presenting={presenting}
+            onPresentingChange={setPresenting}
+          />
         </div>
       )}
-      <footer className="folium-app-credit" aria-label="Version and copyright">
+      <footer
+        className={`folium-app-credit${presenting ? ' folium-app-credit--presenting-dim' : ''}`}
+        aria-label="Version and copyright"
+      >
         <p className="folium-app-credit__tagline">
           Folium v0.1 · All data stays on your device
         </p>

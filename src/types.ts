@@ -2,10 +2,14 @@ export type ElementKind =
   | 'note'
   | 'task'
   | 'card'
+  | 'ellipse'
+  | 'triangle'
+  | 'diamond'
   | 'text'
   | 'image'
   | 'pencil'
   | 'folder'
+  | 'comment'
 
 /** Konva Text.fontStyle values we persist for the text tool. */
 export type TextFontStyleKonva =
@@ -186,34 +190,65 @@ export const DEFAULT_STATE: CanvasState = {
 }
 
 /**
- * FigJam-style unified palette: each row pairs a soft fill (sticky / card tint)
- * with a standard ink (text, pencil, task accent). Same order in every color bar.
+ * Mural-style palette: pastel fills with a bit more body + darker paired inks
+ * for accessible contrast on stickies, cards, tasks, text, and pencil strokes.
  */
-export const FIGJAM_CANVAS_SWATCHES = [
-  { fill: '#FEF9C3', ink: '#A16207' },
-  { fill: '#DCFCE7', ink: '#15803D' },
-  { fill: '#FCE7F3', ink: '#BE185D' },
-  { fill: '#DBEAFE', ink: '#1D4ED8' },
-  { fill: '#EDE9FE', ink: '#6D28D9' },
-  { fill: '#FEE2E2', ink: '#DC2626' },
-  { fill: '#FFEDD5', ink: '#EA580C' },
-  { fill: '#F3F4F6', ink: '#111827' },
+export const MURAL_CANVAS_SWATCHES = [
+  { fill: '#F5E6B8', ink: '#4A3D05' },
+  { fill: '#C9E8CA', ink: '#134E1A' },
+  { fill: '#F0C8D8', ink: '#7A0C35' },
+  { fill: '#CDDCF5', ink: '#122C72' },
+  { fill: '#DFCEF2', ink: '#3B1674' },
+  { fill: '#FFDCC4', ink: '#8B3410' },
+  { fill: '#C0E8ED', ink: '#0A5259' },
+  { fill: '#D9DEE5', ink: '#0F172A' },
 ] as const
 
-/** Sticky note fills (same hues as FigJam toolbar). */
-export const NOTE_COLORS = FIGJAM_CANVAS_SWATCHES.map((s) => s.fill)
+/** @deprecated Use `MURAL_CANVAS_SWATCHES`. */
+export const FIGJAM_CANVAS_SWATCHES = MURAL_CANVAS_SWATCHES
+
+/** Sticky note fills. */
+export const NOTE_COLORS = MURAL_CANVAS_SWATCHES.map((s) => s.fill)
 
 /** Card fills: white first, then the same tints as notes. */
 export const CARD_COLORS = [
   '#FFFFFF',
-  ...FIGJAM_CANVAS_SWATCHES.map((s) => s.fill),
+  ...MURAL_CANVAS_SWATCHES.map((s) => s.fill),
 ] as const
 
 /** Task left accent = ink colors. */
-export const TASK_ACCENT_COLORS = FIGJAM_CANVAS_SWATCHES.map((s) => s.ink)
+export const TASK_ACCENT_COLORS = MURAL_CANVAS_SWATCHES.map((s) => s.ink)
 
 /** Text / pencil strokes = same inks as task accents. */
-export const TEXT_COLORS = FIGJAM_CANVAS_SWATCHES.map((s) => s.ink)
+export const TEXT_COLORS = MURAL_CANVAS_SWATCHES.map((s) => s.ink)
+
+/**
+ * Mural-style palette: greys + white, then strong hues.
+ * Used for free text, geometric shapes, pencil strokes, and their side swatches.
+ */
+export const MURAL_TEXT_PALETTE = [
+  '#0A0A0A',
+  '#262626',
+  '#404040',
+  '#525252',
+  '#737373',
+  '#A3A3A3',
+  '#D4D4D4',
+  '#F5F5F5',
+  '#FFFFFF',
+  '#B91C1C',
+  '#C2410C',
+  '#CA8A04',
+  '#4D7C0F',
+  '#15803D',
+  '#0F766E',
+  '#0369A1',
+  '#1D4ED8',
+  '#4338CA',
+  '#6D28D9',
+  '#A21CAF',
+  '#BE185D',
+] as const
 
 export const ELEMENT_DEFAULTS: Record<
   ElementKind,
@@ -229,7 +264,25 @@ export const ELEMENT_DEFAULTS: Record<
     width: 180,
     height: 80,
     text: 'Card',
-    color: CARD_COLORS[0],
+    color: MURAL_TEXT_PALETTE[8],
+  },
+  ellipse: {
+    width: 140,
+    height: 100,
+    text: '',
+    color: MURAL_TEXT_PALETTE[15],
+  },
+  triangle: {
+    width: 140,
+    height: 120,
+    text: '',
+    color: MURAL_TEXT_PALETTE[12],
+  },
+  diamond: {
+    width: 120,
+    height: 120,
+    text: '',
+    color: MURAL_TEXT_PALETTE[18],
   },
   task: {
     width: 220,
@@ -241,7 +294,7 @@ export const ELEMENT_DEFAULTS: Record<
     width: 240,
     height: 40,
     text: '',
-    color: TEXT_COLORS[7],
+    color: MURAL_TEXT_PALETTE[1],
   },
   image: {
     width: 320,
@@ -253,13 +306,19 @@ export const ELEMENT_DEFAULTS: Record<
     width: 140,
     height: 120,
     text: '',
-    color: TEXT_COLORS[7],
+    color: MURAL_TEXT_PALETTE[1],
   },
   folder: {
     width: 120,
     height: 104,
     text: 'Untitled folder',
     color: '#E8EEF9',
+  },
+  comment: {
+    width: 200,
+    height: 88,
+    text: 'Comment',
+    color: '#F5F3FF',
   },
 }
 
@@ -268,10 +327,14 @@ function isElementKind(v: unknown): v is ElementKind {
     v === 'note' ||
     v === 'task' ||
     v === 'card' ||
+    v === 'ellipse' ||
+    v === 'triangle' ||
+    v === 'diamond' ||
     v === 'text' ||
     v === 'image' ||
     v === 'pencil' ||
-    v === 'folder'
+    v === 'folder' ||
+    v === 'comment'
   )
 }
 

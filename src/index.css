@@ -165,8 +165,10 @@ body,
   top: 50%;
   transform: translate(-50%, -50%);
   display: flex;
+  flex-direction: row;
   align-items: center;
   justify-content: center;
+  gap: 6px;
   max-width: calc(100% - 160px);
   pointer-events: none;
 }
@@ -238,6 +240,35 @@ body,
   color: #737373;
 }
 
+/**
+ * Presenting: bar barely visible — light frosted glass (backdrop blur only).
+ */
+.folium-top-bar--presenting-dim {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.07);
+  backdrop-filter: blur(48px) saturate(150%);
+  -webkit-backdrop-filter: blur(48px) saturate(150%);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.12) inset;
+  transition:
+    background 0.32s ease,
+    backdrop-filter 0.32s ease,
+    -webkit-backdrop-filter 0.32s ease;
+}
+
+.folium-top-bar--presenting-dim .folium-top-bar__logo {
+  opacity: 0.32;
+}
+
+.folium-top-bar--presenting-dim .folium-top-bar__saved-label {
+  color: rgba(55, 65, 81, 0.32);
+}
+
+.folium-top-bar--presenting-dim .folium-top-bar__saved-dot,
+.folium-top-bar--presenting-dim .folium-top-bar__saved-emoji {
+  opacity: 0.35;
+}
+
 /* Slim centered version / privacy + copyright (above board, below tool chrome) */
 .folium-app-credit {
   position: fixed;
@@ -275,6 +306,14 @@ body,
   margin-top: 2px;
   font-size: 9px;
   color: rgba(55, 65, 81, 0.55);
+}
+
+.folium-app-credit--presenting-dim {
+  opacity: 0.16;
+  filter: blur(8px);
+  transition:
+    opacity 0.28s ease,
+    filter 0.28s ease;
 }
 
 .folium-mobile {

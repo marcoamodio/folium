@@ -41,14 +41,16 @@ function SaveStatusIndicator({ status }: { status: ActiveStatus }) {
   )
 }
 
-export function FoliumTopBar() {
+export function FoliumTopBar({ presenting = false }: { presenting?: boolean }) {
   const { status, savedNonce } = useSaveStatus()
 
   const indicatorKey =
     status === 'saved' ? `saved-${savedNonce}` : status
 
   return (
-    <header className="folium-top-bar">
+    <header
+      className={`folium-top-bar${presenting ? ' folium-top-bar--presenting-dim' : ''}`}
+    >
       <div className="folium-top-bar__inner">
         <div className="folium-top-bar__logo-wrap">
           <img
