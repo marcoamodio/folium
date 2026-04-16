@@ -19,7 +19,8 @@
 - **Full restore** — Canvas state reloads after refresh.
 - **Encryption** — AES-256-GCM: the serialized canvas is encrypted in the browser before storage; a key is derived locally (no server).
 - **Zero backend** — Everything stays local in your browser.
-- **Minimal chrome** — Left tool rail ([Lucide](https://lucide.dev/) icons, large tap targets), optional color swatches when placing notes/cards/tasks, save status in the top bar, and a slim footer with version and copyright.
+- **Minimal chrome** — Left tool rail ([Lucide](https://lucide.dev/) icons, large tap targets), optional color swatches when placing notes/cards/tasks, save status in a slim top bar (logo only, no product labels), and a footer with version and copyright.
+- **Comments (placeholder)** — The comment tool in the rail is disabled until shipped. A short “coming soon” hint appears only when you **hover** the control or **click** it (click again to dismiss if you pinned it open).
 
 ## Tech stack
 
