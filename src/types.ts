@@ -1,3 +1,5 @@
+import { base64ToBytes } from './crypto'
+
 export type ElementKind =
   | 'note'
   | 'task'
@@ -105,6 +107,80 @@ export const TEXT_FONT_PRESETS = [
   },
 ] as const
 
+/** `fontFamily` values allowed when loading persisted state (toolbar presets only). */
+export const ALLOWED_FONT_FAMILIES = new Set<string>(
+  TEXT_FONT_PRESETS.map((p) => p.family),
+)
+
+/** Max length for a data-URL image (~10MB encoded). */
+export const MAX_IMAGE_SRC_STRING_LENGTH = 14_000_000
+
+function magicMatchesImageMime(mime: string, bytes: Uint8Array): boolean {
+  if (bytes.length < 4) return false
+  const m = mime.toLowerCase()
+  if (m === 'jpeg') {
+    return bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff
+  }
+  if (m === 'png') {
+    return (
+      bytes[0] === 0x89 &&
+      bytes[1] === 0x50 &&
+      bytes[2] === 0x4e &&
+      bytes[3] === 0x47
+    )
+  }
+  if (m === 'gif') {
+    return (
+      bytes[0] === 0x47 &&
+      bytes[1] === 0x49 &&
+      bytes[2] === 0x46 &&
+      bytes[3] === 0x38
+    )
+  }
+  if (m === 'webp') {
+    if (bytes.length < 12) return false
+    return (
+      bytes[0] === 0x52 &&
+      bytes[1] === 0x49 &&
+      bytes[2] === 0x46 &&
+      bytes[3] === 0x46 &&
+      bytes[8] === 0x57 &&
+      bytes[9] === 0x45 &&
+      bytes[10] === 0x42 &&
+      bytes[11] === 0x50
+    )
+  }
+  if (m === 'svg+xml') {
+    const txt = new TextDecoder('utf-8', { fatal: false }).decode(
+      bytes.subarray(0, Math.min(bytes.length, 256 * 1024)),
+    )
+    const t = txt.trimStart()
+    return /^(<\?xml\b|<svg\b)/i.test(t)
+  }
+  return false
+}
+
+/**
+ * Accepts only safe local data URLs for raster/SVG images (no remote URLs).
+ * Optionally verifies base64 payload magic bytes for jpeg, png, gif, webp, svg+xml.
+ */
+export function isValidImageSrc(src: string): boolean {
+  if (typeof src !== 'string' || src.length > MAX_IMAGE_SRC_STRING_LENGTH) {
+    return false
+  }
+  const m = src.match(
+    /^data:image\/(jpeg|png|webp|gif|svg\+xml);base64,([A-Za-z0-9+/=]+)$/i,
+  )
+  if (!m) return false
+  let bytes: Uint8Array
+  try {
+    bytes = new Uint8Array(base64ToBytes(m[2]!))
+  } catch {
+    return false
+  }
+  return magicMatchesImageMime(m[1]!, bytes)
+}
+
 export function defaultTextFontFamily(): string {
   return TEXT_FONT_PRESETS[0].family
 }
@@ -125,7 +201,7 @@ export function resolveTextFontFamily(
 ): string {
   if (el.kind !== 'text') return defaultTextFontFamily()
   const f = el.fontFamily
-  if (typeof f === 'string' && f.trim().length > 0) return f
+  if (typeof f === 'string' && ALLOWED_FONT_FAMILIES.has(f)) return f
   return defaultTextFontFamily()
 }
 
@@ -368,7 +444,7 @@ function isCanvasElement(v: unknown): v is CanvasElement {
     }
   }
   if (o.kind === 'image') {
-    return typeof o.imageSrc === 'string' && o.imageSrc.length > 0
+    return typeof o.imageSrc === 'string' && isValidImageSrc(o.imageSrc)
   }
   if (o.kind === 'folder') {
     if (o.imageSrc !== undefined) return false
@@ -453,12 +529,217 @@ function isConnector(v: unknown): v is Connector {
   return true
 }
 
-export function parseCanvasStateJson(json: string): CanvasState {
+function normalizeViewport(v: unknown): CanvasState['viewport'] | null {
+  if (!v || typeof v !== 'object') return null
+  const o = v as Record<string, unknown>
+  if (
+    typeof o.x !== 'number' ||
+    typeof o.y !== 'number' ||
+    typeof o.scale !== 'number' ||
+    !Number.isFinite(o.x) ||
+    !Number.isFinite(o.y) ||
+    !Number.isFinite(o.scale)
+  ) {
+    return null
+  }
+  return { x: o.x, y: o.y, scale: o.scale }
+}
+
+function normalizeConnector(v: unknown): Connector | null {
+  if (!v || typeof v !== 'object') return null
+  const o = v as Record<string, unknown>
+  if (
+    typeof o.id !== 'string' ||
+    typeof o.fromId !== 'string' ||
+    typeof o.toId !== 'string' ||
+    typeof o.color !== 'string' ||
+    (o.style !== 'solid' && o.style !== 'dashed')
+  ) {
+    return null
+  }
+  if (!isAnchor(o.fromAnchor) || !isAnchor(o.toAnchor)) return null
+  if (o.label !== undefined && typeof o.label !== 'string') return null
+  const c: Connector = {
+    id: o.id,
+    fromId: o.fromId,
+    toId: o.toId,
+    fromAnchor: o.fromAnchor,
+    toAnchor: o.toAnchor,
+    color: o.color,
+    style: o.style,
+  }
+  if (o.label !== undefined) c.label = o.label
+  return c
+}
+
+function normalizeFontStyle(v: unknown): TextFontStyleKonva | undefined {
+  if (v === undefined) return undefined
+  if (typeof v !== 'string') return undefined
+  const norm = v === 'italic bold' ? 'bold italic' : v
+  if (
+    norm === 'normal' ||
+    norm === 'italic' ||
+    norm === 'bold' ||
+    norm === 'bold italic'
+  ) {
+    return norm
+  }
+  return undefined
+}
+
+function normalizeElement(v: unknown): CanvasElement | null {
+  if (!v || typeof v !== 'object') return null
+  const o = v as Record<string, unknown>
+  if (
+    typeof o.id !== 'string' ||
+    typeof o.x !== 'number' ||
+    typeof o.y !== 'number' ||
+    typeof o.width !== 'number' ||
+    typeof o.height !== 'number' ||
+    typeof o.text !== 'string' ||
+    typeof o.color !== 'string' ||
+    !isElementKind(o.kind) ||
+    !Number.isFinite(o.x) ||
+    !Number.isFinite(o.y) ||
+    !Number.isFinite(o.width) ||
+    !Number.isFinite(o.height)
+  ) {
+    return null
+  }
+
+  const base: CanvasElement = {
+    id: o.id,
+    kind: o.kind,
+    x: o.x,
+    y: o.y,
+    width: o.width,
+    height: o.height,
+    text: o.text,
+    color: o.color,
+  }
+
+  if (o.kind === 'pencil') {
+    if (!Array.isArray(o.points)) return null
+    if (o.points.length < 4) return null
+    if (!o.points.every((n) => typeof n === 'number' && Number.isFinite(n))) {
+      return null
+    }
+    if (
+      typeof o.strokeWidth !== 'number' ||
+      !Number.isFinite(o.strokeWidth) ||
+      o.strokeWidth <= 0
+    ) {
+      return null
+    }
+    base.points = o.points.slice() as number[]
+    base.strokeWidth = o.strokeWidth
+    return base
+  }
+
+  if (o.kind === 'image') {
+    if (typeof o.imageSrc !== 'string' || !isValidImageSrc(o.imageSrc)) {
+      return null
+    }
+    base.imageSrc = o.imageSrc
+    return base
+  }
+
+  if (o.kind === 'folder') {
+    if (o.imageSrc !== undefined) return null
+  } else if (o.imageSrc !== undefined) {
+    if (typeof o.imageSrc !== 'string' || !isValidImageSrc(o.imageSrc)) {
+      return null
+    }
+    base.imageSrc = o.imageSrc
+  }
+
+  if (o.parentFolderId !== undefined) {
+    if (typeof o.parentFolderId !== 'string') return null
+    base.parentFolderId = o.parentFolderId
+  }
+  if (o.fontSize !== undefined) {
+    if (typeof o.fontSize !== 'number' || !Number.isFinite(o.fontSize)) {
+      return null
+    }
+    base.fontSize = o.fontSize
+  }
+  if (o.fontFamily !== undefined) {
+    if (
+      typeof o.fontFamily === 'string' &&
+      ALLOWED_FONT_FAMILIES.has(o.fontFamily)
+    ) {
+      base.fontFamily = o.fontFamily
+    }
+  }
+  const fs = normalizeFontStyle(o.fontStyle)
+  if (fs !== undefined) base.fontStyle = fs
+  if (
+    o.textAlign === 'left' ||
+    o.textAlign === 'center' ||
+    o.textAlign === 'right'
+  ) {
+    base.textAlign = o.textAlign
+  }
+  return base
+}
+
+function normalizeCanvasState(parsed: unknown): CanvasState | null {
+  if (!parsed || typeof parsed !== 'object') return null
+  const o = parsed as Record<string, unknown>
+  if (!Array.isArray(o.elements) || !Array.isArray(o.connectors)) return null
+  const viewport = normalizeViewport(o.viewport)
+  if (!viewport) return null
+  const elements: CanvasElement[] = []
+  for (const raw of o.elements) {
+    const el = normalizeElement(raw)
+    if (el) elements.push(el)
+  }
+  const connectors: Connector[] = []
+  for (const raw of o.connectors) {
+    const c = normalizeConnector(raw)
+    if (c) connectors.push(c)
+  }
+  return { elements, connectors, viewport }
+}
+
+export type CanvasStateParseCorruption = 'invalid_json' | 'invalid_schema'
+
+export type ParseCanvasStateResult = {
+  state: CanvasState
+  corruption: CanvasStateParseCorruption | null
+}
+
+export const CANVAS_STATE_PARSE_WARNING_EVENT = 'folium:canvas-state-parse-warning'
+
+export function parseCanvasStateJson(json: string): ParseCanvasStateResult {
   try {
     const parsed: unknown = JSON.parse(json)
-    if (isCanvasState(parsed)) return parsed
+    const state = normalizeCanvasState(parsed)
+    if (state) {
+      return { state, corruption: null }
+    }
+    if (import.meta.env.DEV) {
+      console.warn('[Folium] canvas state: invalid schema after parse')
+    }
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent(CANVAS_STATE_PARSE_WARNING_EVENT, {
+          detail: { reason: 'invalid_schema' as const },
+        }),
+      )
+    }
+    return { state: DEFAULT_STATE, corruption: 'invalid_schema' }
   } catch {
-    /* invalid JSON */
+    if (import.meta.env.DEV) {
+      console.warn('[Folium] canvas state: invalid JSON')
+    }
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent(CANVAS_STATE_PARSE_WARNING_EVENT, {
+          detail: { reason: 'invalid_json' as const },
+        }),
+      )
+    }
+    return { state: DEFAULT_STATE, corruption: 'invalid_json' }
   }
-  return DEFAULT_STATE
 }

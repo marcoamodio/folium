@@ -5,6 +5,7 @@ import {
   Circle,
   CircleHelp,
   Diamond,
+  ImageOff,
   ListChecks,
   MousePointer2,
   Pencil,
@@ -61,6 +62,7 @@ import {
   TEXT_FONT_SIZE_DEFAULT,
   TEXT_FONT_SIZES,
   TEXT_SIZE_OPTIONS,
+  isValidImageSrc,
 } from './types'
 import { useCanvasHistory } from './useCanvasHistory'
 
@@ -266,7 +268,8 @@ function createImageElement(
   nw: number,
   nh: number,
   indexOffset: number,
-): CanvasElement {
+): CanvasElement | null {
+  if (!isValidImageSrc(imageSrc)) return null
   const { width, height } = worldSizeForImage(nw, nh)
   const d = ELEMENT_DEFAULTS.image
   const stagger = indexOffset * 24
@@ -283,6 +286,43 @@ function createImageElement(
   }
 }
 
+function KonvaBrokenImagePlaceholder({
+  width,
+  height,
+}: {
+  width: number
+  height: number
+}) {
+  const pad = Math.max(6, Math.min(width, height) * 0.12)
+  const x0 = pad
+  const y0 = pad
+  const x1 = width - pad
+  const y1 = height - pad
+  return (
+    <>
+      <Rect
+        width={width}
+        height={height}
+        fill="#e8eaef"
+        cornerRadius={6}
+        listening={false}
+      />
+      <Line
+        points={[x0, y0, x1, y1]}
+        stroke="#94a3b8"
+        strokeWidth={1.75}
+        listening={false}
+      />
+      <Line
+        points={[x1, y0, x0, y1]}
+        stroke="#94a3b8"
+        strokeWidth={1.75}
+        listening={false}
+      />
+    </>
+  )
+}
+
 function BoardRasterImage({
   src,
   width,
@@ -292,8 +332,10 @@ function BoardRasterImage({
   width: number
   height: number
 }) {
+  const valid = isValidImageSrc(src)
   const [img, setImg] = useState<HTMLImageElement | null>(null)
   useEffect(() => {
+    if (!valid) return
     const image = new window.Image()
     let cancelled = false
     image.onload = () => {
@@ -306,7 +348,10 @@ function BoardRasterImage({
     return () => {
       cancelled = true
     }
-  }, [src])
+  }, [src, valid])
+  if (!valid) {
+    return <KonvaBrokenImagePlaceholder width={width} height={height} />
+  }
   if (!img) {
     return (
       <Rect
@@ -1324,7 +1369,8 @@ function CanvasElementNode({
   }
 
   if (display.kind === 'image') {
-    const src = display.imageSrc ?? ''
+    const rawSrc = display.imageSrc ?? ''
+    const safeSrc = isValidImageSrc(rawSrc) ? rawSrc : ''
     return (
       <Group
         x={display.x}
@@ -1353,9 +1399,14 @@ function CanvasElementNode({
           cornerRadius={6}
           fill="rgba(0,0,0,0.01)"
         />
-        {src ? (
+        {safeSrc ? (
           <BoardRasterImage
-            src={src}
+            src={safeSrc}
+            width={display.width}
+            height={display.height}
+          />
+        ) : rawSrc ? (
+          <KonvaBrokenImagePlaceholder
             width={display.width}
             height={display.height}
           />
@@ -2148,7 +2199,10 @@ export function Canvas({
   }, [effectiveSelectedIds])
 
   useEffect(() => {
-    if (!isShapePlacerTool(activeTool)) setShapesMenuOpen(false)
+    if (!isShapePlacerTool(activeTool)) {
+      const id = window.setTimeout(() => setShapesMenuOpen(false), 0)
+      return () => clearTimeout(id)
+    }
   }, [activeTool])
 
   useEffect(() => {
@@ -2324,6 +2378,8 @@ export function Canvas({
 
   const folderViewerActiveImage =
     folderViewerChildren[folderViewerActiveIndex] ?? null
+  const folderViewerActiveSrc = folderViewerActiveImage?.imageSrc ?? ''
+  const folderViewerActiveSrcOk = isValidImageSrc(folderViewerActiveSrc)
 
   const goFolderViewer = useCallback(
     (delta: -1 | 1) => {
@@ -2906,9 +2962,16 @@ export function Canvas({
           const idMap = new Map<string, string>()
           const clonedElements: CanvasElement[] = []
           for (const el of data.elements) {
+            if (
+              el.kind === 'image' &&
+              (!el.imageSrc || !isValidImageSrc(el.imageSrc))
+            ) {
+              continue
+            }
             const id = crypto.randomUUID()
             idMap.set(el.id, id)
-            const { parentFolderId: _omit, ...rest } = el
+            const { parentFolderId, ...rest } = el
+            void parentFolderId
             const cloned: CanvasElement = {
               ...rest,
               id,
@@ -3708,11 +3771,18 @@ export function Canvas({
         }
         try {
           const dataUrl = await readFileAsDataUrl(file)
+          if (!isValidImageSrc(dataUrl)) {
+            skipped++
+            continue
+          }
           const { w, h } = await naturalSizeFromDataUrl(dataUrl)
-          additions.push(
-            createImageElement(pos.wx, pos.wy, dataUrl, w, h, addIndex),
-          )
-          addIndex++
+          const el = createImageElement(pos.wx, pos.wy, dataUrl, w, h, addIndex)
+          if (el) {
+            additions.push(el)
+            addIndex++
+          } else {
+            skipped++
+          }
         } catch {
           skipped++
         }
@@ -4126,9 +4196,9 @@ export function Canvas({
                             justifyContent: 'center',
                           }}
                         >
-                          {folderViewerActiveImage?.imageSrc ? (
+                          {folderViewerActiveSrcOk ? (
                             <img
-                              src={folderViewerActiveImage.imageSrc}
+                              src={folderViewerActiveSrc}
                               alt=""
                               draggable={false}
                               style={{
@@ -4139,6 +4209,21 @@ export function Canvas({
                                 userSelect: 'none',
                               }}
                             />
+                          ) : folderViewerActiveSrc ? (
+                            <div
+                              style={{
+                                width: '100%',
+                                height: '100%',
+                                background: '#e8eaef',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                color: '#94a3b8',
+                              }}
+                              aria-hidden
+                            >
+                              <ImageOff size={48} strokeWidth={1.5} />
+                            </div>
                           ) : (
                             <div style={{ width: '100%', height: '100%', background: '#e2e8f0' }} />
                           )}
@@ -4235,6 +4320,8 @@ export function Canvas({
                           {folderViewerChildren.map((ch, i) => {
                             const active =
                               (folderViewerActiveImage?.id ?? folderViewerChildren[0]?.id) === ch.id
+                            const thumbSrc = ch.imageSrc ?? ''
+                            const thumbOk = thumbSrc && isValidImageSrc(thumbSrc)
                             return (
                               <button
                                 key={ch.id}
@@ -4259,9 +4346,9 @@ export function Canvas({
                                   cursor: 'pointer',
                                 }}
                               >
-                                {ch.imageSrc ? (
+                                {thumbOk ? (
                                   <img
-                                    src={ch.imageSrc}
+                                    src={thumbSrc}
                                     alt=""
                                     draggable={false}
                                     loading="lazy"
@@ -4272,6 +4359,21 @@ export function Canvas({
                                       objectFit: 'cover',
                                     }}
                                   />
+                                ) : thumbSrc ? (
+                                  <div
+                                    style={{
+                                      width: '100%',
+                                      height: '100%',
+                                      background: '#e8eaef',
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      justifyContent: 'center',
+                                      color: '#94a3b8',
+                                    }}
+                                    aria-hidden
+                                  >
+                                    <ImageOff size={22} strokeWidth={1.5} />
+                                  </div>
                                 ) : (
                                   <div style={{ width: '100%', height: '100%', background: '#e2e8f0' }} />
                                 )}
@@ -4372,8 +4474,27 @@ export function Canvas({
                       }}
                     />
                   </div>
-                  <p style={{ margin: '10px 0 0', fontSize: 13, color: '#6b7280' }}>
-                    Version <strong style={{ color: '#374151' }}>{APP_VERSION}</strong>
+                  <p
+                    style={{
+                      margin: '10px 0 0',
+                      fontSize: 15,
+                      fontWeight: 600,
+                      lineHeight: 1.4,
+                      color: '#111827',
+                    }}
+                  >
+                    Version {APP_VERSION}
+                  </p>
+                  <p
+                    style={{
+                      margin: '10px 0 0',
+                      fontSize: 14,
+                      fontWeight: 500,
+                      lineHeight: 1.45,
+                      color: '#374151',
+                    }}
+                  >
+                    Your canvas. Your device. Your data.
                   </p>
                   <p
                     style={{
@@ -4383,7 +4504,21 @@ export function Canvas({
                       color: '#374151',
                     }}
                   >
-                    © {new Date().getFullYear()} {APP_DISPLAY_NAME}. All rights reserved.
+                    {APP_DISPLAY_NAME} is a local-first infinite canvas that runs entirely in your
+                    browser. No accounts, no cloud, no tracking. Everything you create stays on your
+                    device.
+                  </p>
+                  <p
+                    style={{
+                      margin: '14px 0 0',
+                      fontSize: 12,
+                      lineHeight: 1.5,
+                      color: '#6b7280',
+                    }}
+                  >
+                    Open source · MIT License
+                    <br />
+                    © 2026 Marco Amodio · Folium
                   </p>
                   <p
                     style={{
@@ -4393,8 +4528,7 @@ export function Canvas({
                       color: '#6b7280',
                     }}
                   >
-                    This software is provided for your use as-is. Third-party libraries used in
-                    this project retain their respective licenses.
+                    Third-party libraries retain their respective licenses.
                   </p>
                 </div>
               </div>
