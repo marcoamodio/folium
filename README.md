@@ -6,13 +6,14 @@
 
 ## Features
 
-- **Infinite canvas** — Pan and zoom on a dotted board (FigJam-style background).
-- **Elements** — Sticky notes, cards, tasks, FigJam-like text blocks, and **raster images**.
+- **First-launch landing** — If there is no saved canvas yet, a full-screen intro appears (hero, CTA, GitHub and license links, footer). Whether you see it is driven only by **IndexedDB** payload presence and in-session state—no cookies or `localStorage` for that gate. After you open the canvas, the app behaves like a normal editor.
+- **Infinite canvas** — Pan and zoom on a dotted board (FigJam-style background, warm neutral field).
+- **Elements** — Sticky notes, cards, tasks, **shapes** (ellipse, triangle, diamond), FigJam-like text blocks, **freehand pencil** strokes (color + width), **folders** to group items, **raster images**, and connectors (**arrows** between elements, with optional labels).
 - **Text formatting** — While editing a text block, a floating toolbar offers **font presets**, **size**, **color**, **bold / italic**, and **alignment**. Click outside the text (or the toolbar) to commit; **Escape** closes inline edit without leaving select mode for the whole app.
 - **Images** — Drag **JPEG, PNG, WebP, or GIF** from your machine onto the board. Each file up to **5 MB**; images are scaled to a sensible on-canvas size and stored in your saved state (data URLs). Drag selected images to move them like other elements.
 - **Navigation** — Scroll/wheel to pan; **⌘/Ctrl + scroll** to zoom toward the cursor; **+ / −** control in the corner.
 - **Hand tool** — Hold **Space** to pan with the mouse, including when the pointer is over a selected image or other element (same idea as FigJam). **Middle mouse** also pans, including over elements.
-- **Selection** — Click to select, marquee on empty board, resize handles on a single selection, **Delete/Backspace** to remove (when focus is not in an input).
+- **Selection** — Click to select, **multi-select** with Shift/Cmd/Ctrl, marquee on empty board, **group drag**, resize handles on a single selection, **Delete/Backspace** to remove (when focus is not in an input).
 - **Undo / redo** — **⌘/Ctrl+Z** undo; **⌘/Ctrl+⇧Z** redo.
 - **Escape** — Switches to the select tool and clears an active marquee.
 - **Auto-save** — Debounced save (~400 ms) to IndexedDB.
@@ -21,6 +22,12 @@
 - **Zero backend** — Everything stays local in your browser.
 - **Minimal chrome** — Left tool rail ([Lucide](https://lucide.dev/) icons, large tap targets), optional color swatches when placing notes/cards/tasks, save status in a slim top bar (logo only, no product labels), and a footer with version and copyright.
 - **Comments (placeholder)** — The comment tool in the rail is disabled until shipped. A short “coming soon” hint appears only when you **hover** the control or **click** it (click again to dismiss if you pinned it open).
+- **Desktop-first** — Very small phone viewports show a short courtesy screen; use a desktop or tablet-sized window for the canvas.
+
+## Security & privacy (overview)
+
+- Static **Content-Security-Policy** is set in `index.html` (and mirrored for production in `vercel.json`): scripts and fonts are same-origin; images allow `data:` and `blob:` for the canvas workflow; `connect-src` is restricted to `'self'`.
+- External links (e.g. GitHub) use `rel="noopener noreferrer"` where applicable.
 
 ## Tech stack
 

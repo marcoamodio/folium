@@ -1,8 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import landingBackground from './assets/background.webp'
 import { Canvas } from './Canvas'
+import { LandingPage } from './components/LandingPage'
 import { decrypt } from './crypto'
 import { getOrCreateKey } from './cryptoKey'
-import { loadCanvasRow } from './db'
+import { loadCanvasRow, type CanvasRow } from './db'
 import { FoliumTopBar } from './FoliumTopBar'
 import { MobileCourtesy } from './MobileCourtesy'
 import { SaveStatusProvider } from './SaveStatusContext'
@@ -20,37 +22,57 @@ type BootState =
       status: 'ready'
       canvasState: CanvasState
       parseCorruption: CanvasStateParseCorruption | null
+      hasSavedCanvas: boolean
     }
 
 function AppDesktop() {
   const [boot, setBoot] = useState<BootState>({ status: 'loading' })
   const [presenting, setPresenting] = useState(false)
+  const [landingFadeOut, setLandingFadeOut] = useState(false)
+  const [landingDismissed, setLandingDismissed] = useState(false)
+  const landingOpenTimeoutRef = useRef<ReturnType<typeof window.setTimeout> | null>(
+    null,
+  )
+
+  useEffect(() => {
+    return () => {
+      if (landingOpenTimeoutRef.current !== null) {
+        window.clearTimeout(landingOpenTimeoutRef.current)
+        landingOpenTimeoutRef.current = null
+      }
+    }
+  }, [])
 
   useEffect(() => {
     let cancelled = false
+    let rowAtFailure: CanvasRow | undefined
     ;(async () => {
       try {
         await getOrCreateKey()
         const row = await loadCanvasRow()
+        rowAtFailure = row
         if (cancelled) return
 
-        if (!row?.payload) {
+        const hasSavedCanvas = Boolean(row?.payload)
+        if (!hasSavedCanvas) {
           setBoot({
             status: 'ready',
             canvasState: DEFAULT_STATE,
             parseCorruption: null,
+            hasSavedCanvas: false,
           })
           return
         }
 
         const key = await getOrCreateKey()
-        const plaintext = await decrypt(row.payload, key)
+        const plaintext = await decrypt(row!.payload, key)
         const { state, corruption } = parseCanvasStateJson(plaintext)
         if (cancelled) return
         setBoot({
           status: 'ready',
           canvasState: state,
           parseCorruption: corruption,
+          hasSavedCanvas: true,
         })
       } catch {
         if (import.meta.env.DEV) {
@@ -63,6 +85,7 @@ function AppDesktop() {
             status: 'ready',
             canvasState: DEFAULT_STATE,
             parseCorruption: null,
+            hasSavedCanvas: Boolean(rowAtFailure?.payload),
           })
         }
       }
@@ -72,8 +95,25 @@ function AppDesktop() {
     }
   }, [])
 
+  const showLanding =
+    boot.status === 'ready' && !boot.hasSavedCanvas && !landingDismissed
+
+  const showAppChrome =
+    boot.status === 'ready' && (boot.hasSavedCanvas || landingDismissed)
+
+  const handleLandingOpen = () => {
+    setLandingFadeOut(true)
+    landingOpenTimeoutRef.current = window.setTimeout(() => {
+      landingOpenTimeoutRef.current = null
+      setLandingDismissed(true)
+      setLandingFadeOut(false)
+    }, 300)
+  }
+
   const parseBanner =
-    boot.status === 'ready' && boot.parseCorruption ? (
+    showAppChrome &&
+    boot.status === 'ready' &&
+    boot.parseCorruption ? (
       <div
         role="alert"
         className="folium-parse-warning"
@@ -102,28 +142,48 @@ function AppDesktop() {
 
   return (
     <SaveStatusProvider>
-      <FoliumTopBar presenting={presenting} />
-      {parseBanner}
       {boot.status === 'loading' ? (
-        <div className="folium-boot" aria-hidden />
-      ) : (
-        <div className="folium-canvas">
-          <Canvas
-            initialState={boot.canvasState}
-            presenting={presenting}
-            onPresentingChange={setPresenting}
-          />
-        </div>
-      )}
-      <footer
-        className={`folium-app-credit${presenting ? ' folium-app-credit--presenting-dim' : ''}`}
-        aria-label="Version and copyright"
-      >
-        <p className="folium-app-credit__tagline">
-          Folium v0.1 · All data stays on your device
-        </p>
-        <p className="folium-app-credit__owner">© 2026 Marco Amodio</p>
-      </footer>
+        <div
+          className="folium-boot"
+          aria-hidden
+          style={{
+            backgroundImage: `url(${landingBackground})`,
+            backgroundSize: 'cover',
+            backgroundPosition: 'center right',
+            backgroundRepeat: 'no-repeat',
+          }}
+        />
+      ) : null}
+
+      {showAppChrome ? (
+        <>
+          <FoliumTopBar presenting={presenting} />
+          {parseBanner}
+          <div className="folium-canvas">
+            <Canvas
+              initialState={boot.canvasState}
+              presenting={presenting}
+              onPresentingChange={setPresenting}
+            />
+          </div>
+          <footer
+            className={`folium-app-credit${presenting ? ' folium-app-credit--presenting-dim' : ''}`}
+            aria-label="Version and copyright"
+          >
+            <p className="folium-app-credit__tagline">
+              Folium v0.1 · All data stays on your device
+            </p>
+            <p className="folium-app-credit__owner">© 2026 Marco Amodio</p>
+          </footer>
+        </>
+      ) : null}
+
+      {showLanding ? (
+        <LandingPage
+          fadeOut={landingFadeOut}
+          onRequestOpen={handleLandingOpen}
+        />
+      ) : null}
     </SaveStatusProvider>
   )
 }
