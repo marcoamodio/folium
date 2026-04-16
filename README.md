@@ -2,6 +2,9 @@
 
 > Infinite space.
 
+Folium is a local-first infinite canvas that runs entirely in your browser.
+No accounts, no cloud, no tracking. Your data never leaves your device.
+
 **v0.1.0** — An infinite canvas for notes, quick task lists, card sorting, free-form text, and pasted images. Opens instantly. No login. No friction. All data stays on your device.
 
 ## Features
@@ -58,7 +61,7 @@ Other scripts: `npm run build` (typecheck + production bundle), `npm run preview
 
 - [ ] Export canvas (JSON / PNG)
 - [ ] Cloud sync (Phase 2)
-- [ ] Account + subscription (Phase 2)
+- [ ] Optional cloud sync with account (Phase 2, details TBD)
 
 ## Author
 
