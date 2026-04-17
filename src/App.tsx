@@ -171,7 +171,7 @@ function AppDesktop() {
             aria-label="Version and copyright"
           >
             <p className="folium-app-credit__tagline">
-              Folium v0.1 · All data stays on your device
+              Folium v0.1 beta · All data stays on your device
             </p>
             <p className="folium-app-credit__owner">© 2026 Marco Amodio</p>
           </footer>

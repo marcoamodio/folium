@@ -4516,9 +4516,7 @@ export function Canvas({
                       color: '#6b7280',
                     }}
                   >
-                    Open source · MIT License
-                    <br />
-                    © 2026 Marco Amodio · Folium
+                    Folium v0.1 beta · All data stays on your device · © 2026 Marco Amodio
                   </p>
                   <p
                     style={{
